@@ -29,7 +29,7 @@ class ImageClass(Dataset):
         # there should only be one .csv file in the train/test directory, so list(pathlib.Path(targ_dir).glob("*.csv"))[0] gets it!
         self.annotate_df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
         self.classes = list(self.annotate_df['class'].unique())
-        self.class_to_idx = dict(zip(self.classes, range(0, 12)))
+        self.class_to_idx = dict(zip(self.classes, range(1, len(self.classes)+1)))
 
     # 4. Make function to load images
     def load_image(self, index: int) -> Image.Image:
@@ -47,14 +47,15 @@ class ImageClass(Dataset):
         """
         Returns one sample of data, in the form img, dict, where
         img is a torch.Tensor and dict is a Dictonary of the form
-        {
-          "file_name": "img_0001.jpg",
-          "objects": [
-             {'class': '1', 'xmin': 186, 'xmax': 192, 'ymin': 251, 'ymax': 258},
-             {'class': '4', 'xmin': 80, 'xmax': 85, 'ymin': 250, 'ymax': 267},
-             ...
-           ]
-        }.
+        target = {
+                  "boxes":   Tensor[n_i, 4]  # float32, xyxy, absolute pixels
+                  "labels":  Tensor[n_i]     # int64, in {1..num_classes}
+                  # optional but recommended:
+                  "image_id": Tensor[1]      # int64 unique id i.e. index
+                  "area":    Tensor[n_i]     # float32 (box area in pixels)
+                  "iscrowd": Tensor[n_i]     # int64 (0 or 1), 0 if you do not use crowd
+                }
+        where n_i is the number of objects in the ith image.
         """
         img = self.load_image(index)
         # image_path = self.paths[index]
@@ -62,36 +63,64 @@ class ImageClass(Dataset):
         img_df = self.annotate_df[self.annotate_df['filename'] == img_name]
         img_df.loc[:, 'class'] = img_df['class'].map(self.class_to_idx)
         
-        obj_dict = img_df[['class', 'xmin', 'xmax', 'ymin', 'ymax']].to_dict(orient='records')
+        # obj_dict = img_df[['class', 'xmin', 'xmax', 'ymin', 'ymax']].to_dict(orient='records')
         # class_name  = self.paths[index].parent.name # expects path in data_folder/class_name/image.jpeg
         # class_idx = self.class_to_idx[class_name]
 
+        # initialize boxes, labels, areas
+        boxes = torch.zeros(len(img_df), 4)
+        labels = torch.zeros(len(img_df), dtype=torch.int64)
+        areas = torch.zeros(len(img_df))
+        # populate via loop
+        for i in range(len(img_df)):
+            j = 0
+            labels[i] = torch.tensor(img_df.iloc[i]['class'], dtype=torch.int64)
+
+            for coord in ['xmin', 'ymin', 'xmax', 'ymax']:
+                boxes[i, j] = img_df.iloc[i][coord]
+                j = j + 1
+
+            areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
+
+        obj_dict = {
+                    'image_id': torch.tensor([index], dtype=torch.int64),
+                    'labels': labels,
+                    'boxes': boxes,
+                    'areas': areas,
+                    }
+        
+
+        return img, obj_dict # {**{"file_name": img_name}, **{"target": obj_dict}}
+    
+
         # Transform if necessary
-        if self.transform:
-            # is Resize part of the transform?
-            resize_flag = False
-            resize_index = 0
-            for i, x in enumerate(self.transform.transforms):
-                if x.__class__.__name__ == "Resize":
-                    resize_flag = True
-                    resize_index = i
+        # it seems torch.transforms.v2 will take care of it
+        # if self.transform:
+        #     # is Resize part of the transform?
+        #     resize_flag = False
+        #     resize_index = 0
+        #     # is 
+        #     for i, x in enumerate(self.transform.transforms):
+        #         if x.__class__.__name__ == "Resize":
+        #             resize_flag = True
+        #             resize_index = i
 
-            if resize_flag == False:
-                return self.transform(img), {**{"file_name": img_name}, **{"objects": obj_dict}}
-            else:
-                for column in ['xmin', 'xmax']:
-                    new_width = self.transform.transforms[resize_index].size[0]
-                    img_df.loc[:, column] = img_df[column] * (new_width / img_df['width'])
-                for column in ['ymin', 'ymax']:
-                    new_height = self.transform.transforms[resize_index].size[1]
-                    img_df.loc[:, column] = img_df[column] * (new_height / img_df['height'])
+        #     if resize_flag == False:
+        #         return self.transform(img), {**{"file_name": img_name}, **{"objects": obj_dict}}
+        #     else:
+        #         for column in ['xmin', 'xmax']:
+        #             new_width = self.transform.transforms[resize_index].size[0]
+        #             img_df.loc[:, column] = img_df[column] * (new_width / img_df['width'])
+        #         for column in ['ymin', 'ymax']:
+        #             new_height = self.transform.transforms[resize_index].size[1]
+        #             img_df.loc[:, column] = img_df[column] * (new_height / img_df['height'])
                 
-                obj_dict = img_df[['class', 'xmin', 'xmax', 'ymin', 'ymax']].to_dict(orient='records')
+        #         obj_dict = img_df[['class', 'xmin', 'xmax', 'ymin', 'ymax']].to_dict(orient='records')
 
-                return self.transform(img), {**{"file_name": img_name}, **{"objects": obj_dict}}
+        #         return self.transform(img), {**{"file_name": img_name}, **{"objects": obj_dict}}
 
-        else:
-            return img, {**{"file_name": img_name}, **{"objects": obj_dict}}
+        # else:
+        #     return img, {**{"file_name": img_name}, **{"objects": obj_dict}}
     
 
 
@@ -124,17 +153,18 @@ class ImageClass(Dataset):
 
 
         # plot image
-        fig, ax = plt.subplots()
+        H, W = arr.shape[:2]
+        dpi = 100
+        fig, ax = plt.subplots(figsize=(W/dpi, H/dpi), dpi=dpi)
         ax.imshow(arr)  # origin='upper' -> y downward, matches image coords
 
-        for i in range(len(self[index][1]['objects'])):
+        for i in range(len(self[index][1]['labels'])):
 
             # basic sanity + clipping
-            H, W = arr.shape[:2]
-            x_min = self[index][1]['objects'][i]['xmin']
-            x_max = self[index][1]['objects'][i]['xmax']
-            y_min = self[index][1]['objects'][i]['ymin']
-            y_max = self[index][1]['objects'][i]['ymax']
+            x_min = self[index][1]['boxes'][i, 0]
+            y_min = self[index][1]['boxes'][i, 1]
+            x_max = self[index][1]['boxes'][i, 2]
+            y_max = self[index][1]['boxes'][i, 3]
             x_min, y_min = max(0.0, x_min), max(0.0, y_min)
             x_max, y_max = min(W - 1, x_max), min(H - 1, y_max)
             if not (x_max > x_min and y_max > y_min):
@@ -151,7 +181,7 @@ class ImageClass(Dataset):
             )
             ax.add_patch(rect)
             if label:
-                im_label_masked = self[index][1]['objects'][i]['class']
+                im_label_masked = self[index][1]['labels'][i]
                 im_label = list(self.class_to_idx.keys())[list(self.class_to_idx.values()).index(im_label_masked)]
                 ax.text(
                     x_min, y_min,
@@ -162,7 +192,8 @@ class ImageClass(Dataset):
                     ha="left",
                     bbox=dict(facecolor=color, alpha=0.6, pad=2, edgecolor="none"),
                 )
-            ax.axis("off")
+        
+        ax.axis("off")
 
         return fig, ax
 
