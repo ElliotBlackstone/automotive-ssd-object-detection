@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import Dataset
 from torchvision import tv_tensors
+from torchvision.io import decode_image
 import pathlib
 from PIL import Image
 from typing import Tuple, Dict, List
@@ -46,8 +47,8 @@ class ImageClass(Dataset):
     # 6. Overwrite the __getitem__() method (required for subclasses of torch.utils.data.Dataset)
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, Dict]:
         """
-        Returns one sample of data, in the form img, dict, where
-        img is a torch.Tensor and dict is a Dictonary of the form
+        Returns one sample of data, in the form img, target, where
+        img is a torch.Tensor and target is a Dictonary of the form
         target = {
                   "boxes":   Tensor[n_i, 4]  # float32, xyxy, absolute pixels
                   "labels":  Tensor[n_i]     # int64, in {1..num_classes}
@@ -58,7 +59,8 @@ class ImageClass(Dataset):
                 }
         where n_i is the number of objects in the ith image.
         """
-        img = self.load_image(index).convert("RGB")
+        img = decode_image(str(self.paths[index]))
+        # img = self.load_image(index).convert("RGB")
         # image_path = self.paths[index]
         img_name = self.paths[index].stem + '.jpg'
         img_df = self.annotate_df[self.annotate_df['filename'] == img_name]
@@ -86,10 +88,11 @@ class ImageClass(Dataset):
         iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
 
         # Wrap into tv_tensors so transforms know how to move boxes with the image
-        w, h = img.size
-        img = tv_tensors.Image(img)
+        # w, h = img.size
+        # w, h = img.shape[1:]
+        # img = tv_tensors.Image(img)
         boxes = tv_tensors.BoundingBoxes(
-            boxes, format=tv_tensors.BoundingBoxFormat.XYXY, canvas_size=(h, w)
+            boxes, format="XYXY", canvas_size=img.shape[-2:]
         )
 
         target = {
@@ -103,50 +106,20 @@ class ImageClass(Dataset):
         if self.transform is not None:
             img, target = self.transform(img, target)
 
+        target['areas'] = (target['boxes'][:,2] - target['boxes'][:,0]).clamp(0, img.shape[-1]) * (target['boxes'][:,3] - target['boxes'][:,1]).clamp(0, img.shape[-2])
+
         # Convert back to plain tensors for model consumption
-        target["boxes"] = torch.as_tensor(target["boxes"], dtype=torch.float32)
-        img = torch.as_tensor(img, dtype=torch.uint8)  # or later cast to float/normalize
+        # target["boxes"] = torch.as_tensor(target["boxes"], dtype=torch.float32)
+        # img = torch.as_tensor(img, dtype=torch.uint8)  # or later cast to float/normalize
 
         return img, target # {**{"file_name": img_name}, **{"target": obj_dict}}
     
-
-        # Transform if necessary
-        # it seems torch.transforms.v2 will take care of it
-        # if self.transform:
-        #     # is Resize part of the transform?
-        #     resize_flag = False
-        #     resize_index = 0
-        #     # is 
-        #     for i, x in enumerate(self.transform.transforms):
-        #         if x.__class__.__name__ == "Resize":
-        #             resize_flag = True
-        #             resize_index = i
-
-        #     if resize_flag == False:
-        #         return self.transform(img), {**{"file_name": img_name}, **{"objects": obj_dict}}
-        #     else:
-        #         for column in ['xmin', 'xmax']:
-        #             new_width = self.transform.transforms[resize_index].size[0]
-        #             img_df.loc[:, column] = img_df[column] * (new_width / img_df['width'])
-        #         for column in ['ymin', 'ymax']:
-        #             new_height = self.transform.transforms[resize_index].size[1]
-        #             img_df.loc[:, column] = img_df[column] * (new_height / img_df['height'])
-                
-        #         obj_dict = img_df[['class', 'xmin', 'xmax', 'ymin', 'ymax']].to_dict(orient='records')
-
-        #         return self.transform(img), {**{"file_name": img_name}, **{"objects": obj_dict}}
-
-        # else:
-        #     return img, {**{"file_name": img_name}, **{"objects": obj_dict}}
-    
-
-
 
     def show_with_box(self, index: int, color: str = "C0", lw: int = 2, label: bool = False) -> Tuple[Figure, Axes]:
         
 
         # convert the image to a numpy array
-        img = self.load_image(index)
+        img, target = self[index]
 
         if isinstance(img, Image.Image):
             arr = np.array(img)
@@ -175,17 +148,18 @@ class ImageClass(Dataset):
         fig, ax = plt.subplots(figsize=(W/dpi, H/dpi), dpi=dpi)
         ax.imshow(arr)  # origin='upper' -> y downward, matches image coords
 
-        for i in range(len(self[index][1]['labels'])):
+        for i in range(len(target['labels'])):
 
             # basic sanity + clipping
-            x_min = self[index][1]['boxes'][i, 0]
-            y_min = self[index][1]['boxes'][i, 1]
-            x_max = self[index][1]['boxes'][i, 2]
-            y_max = self[index][1]['boxes'][i, 3]
+            x_min = target['boxes'][i, 0]
+            y_min = target['boxes'][i, 1]
+            x_max = target['boxes'][i, 2]
+            y_max = target['boxes'][i, 3]
             x_min, y_min = max(0.0, x_min), max(0.0, y_min)
             x_max, y_max = min(W - 1, x_max), min(H - 1, y_max)
             if not (x_max > x_min and y_max > y_min):
-                raise ValueError("Degenerate or inverted box after clipping.")
+                # raise ValueError("Degenerate or inverted box after clipping.")
+                continue
 
             
             rect = Rectangle(
