@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+from torchvision import tv_tensors
 import pathlib
 from PIL import Image
 from typing import Tuple, Dict, List
@@ -57,7 +58,7 @@ class ImageClass(Dataset):
                 }
         where n_i is the number of objects in the ith image.
         """
-        img = self.load_image(index)
+        img = self.load_image(index).convert("RGB")
         # image_path = self.paths[index]
         img_name = self.paths[index].stem + '.jpg'
         img_df = self.annotate_df[self.annotate_df['filename'] == img_name]
@@ -82,15 +83,31 @@ class ImageClass(Dataset):
 
             areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
 
-        obj_dict = {
-                    'image_id': torch.tensor([index], dtype=torch.int64),
-                    'labels': labels,
-                    'boxes': boxes,
-                    'areas': areas,
-                    }
-        
+        iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
 
-        return img, obj_dict # {**{"file_name": img_name}, **{"target": obj_dict}}
+        # Wrap into tv_tensors so transforms know how to move boxes with the image
+        w, h = img.size
+        img = tv_tensors.Image(img)
+        boxes = tv_tensors.BoundingBoxes(
+            boxes, format=tv_tensors.BoundingBoxFormat.XYXY, canvas_size=(h, w)
+        )
+
+        target = {
+                  'image_id': torch.tensor([index], dtype=torch.int64),
+                  'labels': labels,
+                  'boxes': boxes,
+                  'areas': areas,
+                  'iscrowd': iscrowd,
+                  }
+        
+        if self.transform is not None:
+            img, target = self.transform(img, target)
+
+        # Convert back to plain tensors for model consumption
+        target["boxes"] = torch.as_tensor(target["boxes"], dtype=torch.float32)
+        img = torch.as_tensor(img, dtype=torch.uint8)  # or later cast to float/normalize
+
+        return img, target # {**{"file_name": img_name}, **{"target": obj_dict}}
     
 
         # Transform if necessary
