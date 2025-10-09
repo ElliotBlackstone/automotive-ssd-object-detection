@@ -19,11 +19,22 @@ from matplotlib.axes import Axes
 class ImageClass(Dataset):
     
     # 2. Initialize with a targ_dir and transform (optional) parameter
-    def __init__(self, targ_dir: str, transform=None) -> None:
+    def __init__(self, targ_dir: str, transform=None, file_pct: float = 1) -> None:
         
         # 3. Create class attributes
         # Get all image paths
-        self.paths = list(pathlib.Path(targ_dir).glob("*.jpg")) # note: you'd have to update this if you've got .png's or .jpeg's
+        all_paths = list(pathlib.Path(targ_dir).glob("*.jpg"))
+        
+        if (file_pct < 0) | (file_pct > 1):
+            raise TypeError("file_pct must be between 0 and 1.")
+        
+        num_files = np.floor((len(all_paths) * file_pct)).astype(int)
+
+        if file_pct != 1:
+            rng = np.random.default_rng(724)
+            self.paths = rng.choice(all_paths, size=num_files, replace=False).tolist()
+        else:
+            self.paths = all_paths
         # Setup transforms
         self.transform = transform
         # Create classes and class_to_idx attributes
