@@ -30,17 +30,28 @@ class ImageClass(Dataset):
         
         num_files = np.floor((len(all_paths) * file_pct)).astype(int)
 
+        # there should only be one .csv file in the train/test directory, so list(pathlib.Path(targ_dir).glob("*.csv"))[0] gets it!
+        df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
+
         if file_pct != 1:
             rng = np.random.default_rng(724)
             self.paths = rng.choice(all_paths, size=num_files, replace=False).tolist()
+            
+            # get file names
+            filenames = []
+            for file in self.paths:
+                filenames.append(file.stem + '.jpg')
+            
+            self.annotate_df = df[df['filename'].isin(filenames)]
         else:
             self.paths = all_paths
+            self.annotate_df = df
         # Setup transforms
         self.transform = transform
         # Create classes and class_to_idx attributes
         # self.classes, self.class_to_idx = find_classes(targ_dir)
         # there should only be one .csv file in the train/test directory, so list(pathlib.Path(targ_dir).glob("*.csv"))[0] gets it!
-        self.annotate_df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
+        # self.annotate_df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
         self.classes = list(self.annotate_df['class'].unique())
         self.class_to_idx = dict(zip(self.classes, range(1, len(self.classes)+1)))
 
