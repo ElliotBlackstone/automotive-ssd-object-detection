@@ -53,6 +53,7 @@ class ImageClass(Dataset):
         # there should only be one .csv file in the train/test directory, so list(pathlib.Path(targ_dir).glob("*.csv"))[0] gets it!
         # self.annotate_df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
         self.classes = list(self.annotate_df['class'].unique())
+        self.classes.sort()
         self.class_to_idx = dict(zip(self.classes, range(1, len(self.classes)+1)))
 
     # 4. Make function to load images
@@ -74,7 +75,6 @@ class ImageClass(Dataset):
         target = {
                   "boxes":   Tensor[n_i, 4]  # float32, xyxy, absolute pixels
                   "labels":  Tensor[n_i]     # int64, in {1..num_classes}
-                  # optional but recommended:
                   "image_id": Tensor[1]      # int64 unique id i.e. index
                   "area":    Tensor[n_i]     # float32 (box area in pixels)
                   "iscrowd": Tensor[n_i]     # int64 (0 or 1), 0 if you do not use crowd
@@ -383,8 +383,8 @@ class ImageClassSimple(Dataset):
                     str(im_label),
                     fontsize=10,
                     color="white",
-                    va="top",
-                    ha="left",
+                    va="bottom",
+                    ha="right",
                     bbox=dict(facecolor=color, alpha=0.6, pad=2, edgecolor="none"),
                 )
             ax.axis("off")
