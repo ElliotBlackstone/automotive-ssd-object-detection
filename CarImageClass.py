@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
+from sklearn.model_selection import train_test_split
 
 # Write a custom dataset class (inherits from torch.utils.data.Dataset)
 
@@ -19,11 +20,21 @@ from matplotlib.axes import Axes
 class ImageClass(Dataset):
     
     # 2. Initialize with a targ_dir and transform (optional) parameter
-    def __init__(self, targ_dir: str, transform=None, file_pct: float = 1) -> None:
+    def __init__(self,
+                 targ_dir: str,
+                 file_list: list = None,
+                 transform=None,
+                 file_pct: float = 1,
+                 rand_seed: int = 724,
+                 ) -> None:
         
         # 3. Create class attributes
         # Get all image paths
-        all_paths = list(pathlib.Path(targ_dir).glob("*.jpg"))
+        if file_list is None:
+            all_paths = list(pathlib.Path(targ_dir).glob("*.jpg"))
+        else:
+            all_paths = [targ_dir / n for n in file_list]
+            file_pct = 1
         
         if (file_pct < 0) | (file_pct > 1):
             raise TypeError("file_pct must be between 0 and 1.")
@@ -34,7 +45,7 @@ class ImageClass(Dataset):
         df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
 
         if file_pct != 1:
-            rng = np.random.default_rng(724)
+            rng = np.random.default_rng(rand_seed)
             self.paths = rng.choice(all_paths, size=num_files, replace=False).tolist()
             
             # get file names
@@ -45,7 +56,10 @@ class ImageClass(Dataset):
             self.annotate_df = df[df['filename'].isin(filenames)]
         else:
             self.paths = all_paths
-            self.annotate_df = df
+            if file_list is None:
+                self.annotate_df = df
+            else:
+                self.annotate_df = df[df['filename'].isin(file_list)]
         # Setup transforms
         self.transform = transform
         # Create classes and class_to_idx attributes
@@ -53,8 +67,9 @@ class ImageClass(Dataset):
         # there should only be one .csv file in the train/test directory, so list(pathlib.Path(targ_dir).glob("*.csv"))[0] gets it!
         # self.annotate_df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
         self.classes = list(self.annotate_df['class'].unique())
-        self.classes.sort()
-        self.class_to_idx = dict(zip(self.classes, range(1, len(self.classes)+1)))
+        self.classes.sort() # alphabetical sort of classes
+        self.class_to_idx = dict(zip(self.classes, range(0, len(self.classes))))
+        self.directory = targ_dir
 
     # 4. Make function to load images
     def load_image(self, index: int) -> Image.Image:
@@ -134,6 +149,7 @@ class ImageClass(Dataset):
 
         return img, target # {**{"file_name": img_name}, **{"target": obj_dict}}
     
+
     
     def show_with_box(self,
                       index: int,
@@ -238,7 +254,40 @@ class ImageClass(Dataset):
         return fig
 
 
-    
+def make_train_test_split(full_set: ImageClass,
+                          test_size: float = 0.25,
+                          rand_state: int = None,
+                          ) -> Tuple[ImageClass, ImageClass]:
+        """
+        Create a train/test split of an image class.
+
+        Inputs:
+        full_set - ImageClass file to be train/test splitted
+        test_size - float between 0 and 1 that determines the size of the training and testing sets
+        rand_state - integer for random state reproducability
+
+        Outputs:
+        training ImageClass file of size len(full_set) * (1 - test_size)
+        testing ImageClass file of size len(full_set) * test_size
+        """
+        # df of original ImageClass file
+        df = full_set.annotate_df
+
+        # sklearn train/test split the original dataset, stratify with respect to class
+        train_df, test_df = train_test_split(df, test_size=test_size, random_state=rand_state, stratify=df['class'])
+
+        # create training/testing list of file names
+        train_files = train_df['filename'].to_list()
+        test_files = test_df['filename'].to_list()
+
+        # create training/testing ImageClass files
+        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files)
+        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files)
+
+        return train_IC, test_IC
+
+
+
 
 # 1. Subclass torch.utils.data.Dataset
 class ImageClassSimple(Dataset):
