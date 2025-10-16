@@ -257,6 +257,8 @@ class ImageClass(Dataset):
 def make_train_test_split(full_set: ImageClass,
                           test_size: float = 0.25,
                           rand_state: int = None,
+                          transform_train = None,
+                          transform_test = None,
                           ) -> Tuple[ImageClass, ImageClass]:
         """
         Create a train/test split of an image class.
@@ -265,6 +267,8 @@ def make_train_test_split(full_set: ImageClass,
         full_set - ImageClass file to be train/test splitted
         test_size - float between 0 and 1 that determines the size of the training and testing sets
         rand_state - integer for random state reproducability
+        transform_train - torchvision v2 transforms for training set
+        transform_test - torchvision v2 transforms for testing set
 
         Outputs:
         training ImageClass file of size len(full_set) * (1 - test_size)
@@ -281,8 +285,8 @@ def make_train_test_split(full_set: ImageClass,
         test_files = test_df['filename'].to_list()
 
         # create training/testing ImageClass files
-        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files)
-        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files)
+        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files, transform=transform_train)
+        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files, transform=transform_test)
 
         return train_IC, test_IC
 
