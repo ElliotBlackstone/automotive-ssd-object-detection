@@ -1,0 +1,475 @@
+import torch
+from torch import nn
+
+import torchvision
+from torchvision.ops import box_convert, nms, clip_boxes_to_image, box_iou
+
+import pathlib
+from PIL import Image
+from typing import Tuple, Dict, List
+import pandas as pd
+import numpy as np
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
+
+from tqdm.auto import tqdm
+
+from collections import OrderedDict
+
+from SSD_from_scratch import mySSD
+
+
+
+
+def SSD_train_step(model: torch.nn.Module,
+                   dataloader: torch.utils.data.DataLoader,
+                   optimizer: torch.optim.Optimizer,
+                   priors_cxcywh: torch.tensor,
+                   iou_thresh: float = 0.5,
+                   variances: Tuple[float, float] = (0.1, 0.2),
+                   neg_pos_ratio: float = 3.0,
+                   device: str = 'cpu',
+                   ):
+    """
+    Inputs:
+    model - a SSD model to be trained
+    dataloader - the data on which the model is to be trained
+    optimizer - 
+    priors_cxcywh - a tensor of priors with shape (8732, 4)
+    iou_thresh - IoU threshold for prior/ground truth overlap, float between 0 and 1.
+    neg_pos_ration - Negative to positive ratio for hard negative mining, float greater than 0.
+    device - 'cpu' or 'cuda'
+
+    Outputs:
+    Dictonary with localization loss, classification loss, and total loss (sum of loc+cls loss)
+    """
+
+    if (device != 'cpu') & (device != 'cuda'):
+        raise ValueError(f"device must be 'cpu' or 'cuda', recieved {device}.")
+
+    # put model in train mode
+    model.train()
+
+    # initialize loss
+    train_loss = 0
+    loc_loss = 0
+    cls_loss = 0
+
+    # loop through data loader batches
+    for batch, (images, targets) in enumerate(dataloader):
+        images = images.to(device)
+        
+        # forward pass
+        loc_all, conf_all = model(images)
+        N, P, C = conf_all.shape          # N - batch size, P - number of priors (8732), C - number of classes
+
+        # -------- 1) Build per-image targets via encode() --------
+        H, W = images.shape[-2], images.shape[-1]     # image size - should be 300x300
+        norm = torch.tensor([W, H, W, H], device=device, dtype=torch.float32)
+
+        loc_t_list   = []
+        cls_t_list   = []
+        pos_mask_lst = []
+
+        for i in range(N):
+            # normalize GT to [0,1] and convert to cxcywh
+            gt_xyxy_px = targets[i]['boxes'].to(device=device, dtype=torch.float32)
+            gt_labels  = targets[i]['labels'].to(device=device)
+            if gt_xyxy_px.numel() == 0:
+                gt_cxcywh = gt_xyxy_px.new_zeros((0,4))
+            else:
+                gt_xyxy = gt_xyxy_px / norm
+                gt_cxcywh = box_convert(gt_xyxy, in_fmt='xyxy', out_fmt='cxcywh')
+
+            loc_t, cls_t, pos_mask, _ = mySSD.encode_ssd(
+                gt_cxcywh, gt_labels, priors_cxcywh,
+                iou_thresh=iou_thresh, variances=variances, background_class=0
+            )
+            # shapes: [P,4], [P], [P]
+            loc_t_list.append(loc_t)
+            cls_t_list.append(cls_t)
+            pos_mask_lst.append(pos_mask)
+
+        loc_t   = torch.stack(loc_t_list, dim=0).to(device)      # [N,P,4]
+        cls_t   = torch.stack(cls_t_list, dim=0).to(device)      # [N,P]
+        pos_mask = torch.stack(pos_mask_lst, dim=0).to(device)   # [N,P] bool
+        neg_mask = ~pos_mask
+
+        # number of positives per image (avoid zero division)
+        num_pos_per_img = pos_mask.sum(dim=1)                    # [N]
+        total_pos = num_pos_per_img.sum().clamp_min(1).float()   # scalar
+
+
+        # -------- 2) Localization loss (positives only) --------
+        # SmoothL1 on offsets (no decode), sum then normalize by #pos
+        loc_loss_sL1 = torch.nn.functional.smooth_l1_loss(
+            loc_all[pos_mask], loc_t[pos_mask], reduction='sum'
+        ) / total_pos
+
+        # -------- 3) Classification loss with hard-negative mining --------
+        # cross-entropy per prior (no reduction)
+        ce = torch.nn.functional.cross_entropy(
+            conf_all.view(-1, C), cls_t.view(-1), reduction='none'
+        ).view(N, P)  # [N,P]
+
+        # keep CE on positives always
+        ce_pos = (ce * pos_mask.float()).sum()
+
+        # select hardest negatives per image at ratio R:1 w.r.t positives
+        ce_neg_sum = torch.tensor(0.0, device=device)
+        for i in range(N):
+            n_pos = int(num_pos_per_img[i].item())
+            if n_pos == 0:
+                # still allow some negatives to contribute (common trick: pretend 1 positive)
+                max_negs = int(neg_pos_ratio)
+            else:
+                max_negs = int(neg_pos_ratio * n_pos)
+
+            ce_neg_i = ce[i].masked_select(neg_mask[i])         # [#neg_i]
+            if ce_neg_i.numel() == 0 or max_negs == 0:
+                continue
+            k = min(max_negs, ce_neg_i.numel())
+            topk_vals, _ = torch.topk(ce_neg_i, k, largest=True, sorted=False)
+            ce_neg_sum += topk_vals.sum()
+
+        conf_loss = (ce_pos + ce_neg_sum) / total_pos
+
+        # loss
+        batch_loss = loc_loss_sL1 + conf_loss
+        
+        loc_loss += loc_loss_sL1.item()
+        cls_loss += conf_loss.item()
+        train_loss += batch_loss.item()
+
+        # Optimizer zero grad
+        optimizer.zero_grad(set_to_none=True)
+
+        # loss backward
+        batch_loss.backward()
+
+        # optimizer step
+        optimizer.step()
+
+
+    train_loss = train_loss / len(dataloader)
+    loc_loss = loc_loss / len(dataloader)
+    cls_loss = cls_loss / len(dataloader)
+    return {"training loss": train_loss, "localization loss": loc_loss, "classification loss": cls_loss}
+
+
+
+
+def SSD_test_step(model: torch.nn.Module,
+                  dataloader: torch.utils.data.DataLoader,
+                  priors_cxcywh: torch.tensor,
+                  iou_thresh: float = 0.5,
+                  variances: Tuple[float, float] = (0.1, 0.2),
+                  neg_pos_ratio: float = 3.0,
+                # score_thresh=0.05,
+                # nms_iou=0.5,
+                # max_detections_per_img=200,
+                  device: str = 'cpu',
+                  ):
+    
+    # device check
+    if (device != 'cpu') & (device != 'cuda'):
+        raise ValueError(f"device must be 'cpu' or 'cuda', recieved {device}.")
+
+    # put model in eval mode
+    model.eval()
+
+    # initialize loss
+    conf_loss = 0
+    loc_loss = 0
+    test_loss = 0
+    outputs = []
+
+    # turn on inference mode
+    with torch.inference_mode():
+        # loop through dataloader batches
+        for batch, (images, targets) in enumerate(dataloader):
+            images = images.to(device)
+
+            loc_all, conf_all = model(images)
+            N, P, C = conf_all.shape          # N - batch size, P - number of priors (8732), C - number of classes
+            H, W = images.shape[-2], images.shape[-1]
+            norm = torch.tensor([W, H, W, H], device=device, dtype=torch.float32)
+
+            # ---------- Build targets (same as train) ----------
+            loc_t_list, cls_t_list, pos_mask_lst = [], [], []
+            for i in range(N):
+                b_px = targets[i]["boxes"].to(device=device, dtype=torch.float32).reshape(-1, 4)
+                l    = targets[i]["labels"].to(device=device).reshape(-1)
+                if b_px.numel() == 0:
+                    gt_cxcywh = b_px.new_zeros((0, 4))
+                else:
+                    b_norm = b_px / norm
+                    gt_cxcywh = box_convert(b_norm, in_fmt="xyxy", out_fmt="cxcywh")
+
+                loc_t, cls_t, pos_mask, _ = mySSD.encode_ssd(
+                    gt_cxcywh, l, priors_cxcywh,
+                    iou_thresh=iou_thresh, variances=variances, background_class=0
+                )
+                loc_t_list.append(loc_t)
+                cls_t_list.append(cls_t)
+                pos_mask_lst.append(pos_mask)
+
+            loc_t   = torch.stack(loc_t_list, dim=0).to(device)          # [N,P,4]
+            cls_t   = torch.stack(cls_t_list, dim=0).to(device)          # [N,P]
+            pos_mask = torch.stack(pos_mask_lst, dim=0).to(device)       # [N,P] bool
+            neg_mask = ~pos_mask
+            num_pos_per_img = pos_mask.sum(dim=1)             # [N]
+            total_pos = num_pos_per_img.sum().clamp_min(1).float()
+
+
+            # ---------- Losses (no backward) ----------
+            # Localization: SmoothL1 on positives only
+            batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t[pos_mask], reduction="sum") / total_pos
+
+            # Classification: cross-entropy with hard-negative mining (same as train)
+            ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction="none").view(N, P)
+            ce_pos = (ce * pos_mask.float()).sum()
+
+            ce_neg_sum = torch.tensor(0.0, device=device)
+            for i in range(N):
+                n_pos = int(num_pos_per_img[i].item())
+                max_negs = int(neg_pos_ratio * n_pos) if n_pos > 0 else int(neg_pos_ratio)
+                ce_neg_i = ce[i].masked_select(neg_mask[i])   # [#neg_i]
+                if ce_neg_i.numel() > 0 and max_negs > 0:
+                    k = min(max_negs, ce_neg_i.numel())
+                    ce_neg_sum += ce_neg_i.topk(k, largest=True).values.sum()
+
+            batch_conf_loss = (ce_pos + ce_neg_sum) / total_pos
+            batch_total_loss = batch_loc_loss + batch_conf_loss
+
+            loc_loss += batch_loc_loss.item()
+            conf_loss += batch_conf_loss.item()
+            test_loss += batch_total_loss.item()
+
+
+            # # ---------- Decode + NMS (per image outputs) ----------
+            # v_c, v_s = variances
+            # # decode to normalized cxcywh → xyxy
+            # cx = loc_all[..., 0] * v_c * priors_cxcywh[:, 2] + priors_cxcywh[:, 0]
+            # cy = loc_all[..., 1] * v_c * priors_cxcywh[:, 3] + priors_cxcywh[:, 1]
+            # w  = priors_cxcywh[:, 2] * torch.exp(loc_all[..., 2] * v_s)
+            # h  = priors_cxcywh[:, 3] * torch.exp(loc_all[..., 3] * v_s)
+            # boxes_cxcywh = torch.stack([cx, cy, w, h], dim=-1)             # [N,P,4] normalized
+            # boxes_xyxy   = box_convert(boxes_cxcywh, "cxcywh", "xyxy")
+            # boxes_px     = (boxes_xyxy * norm)                             # [N,P,4] pixels
+            # boxes_px     = clip_boxes_to_image(boxes_px, (int(H), int(W))) # clamp
+
+            # probs = torch.softmax(conf_all, dim=-1)                        # [N,P,C]
+            # for i in range(N):
+            #     boxes_i = boxes_px[i]                                      # [P,4]
+            #     probs_i = probs[i]                                         # [P,C]
+
+            #     # drop background
+            #     scores_i, labels_i = probs_i[:, 1:].max(dim=1)
+            #     labels_i = labels_i + 1                                    # shift to {1..C-1}
+
+            #     # score filter
+            #     keep = scores_i >= score_thresh
+            #     boxes_k  = boxes_i[keep]
+            #     labels_k = labels_i[keep]
+            #     scores_k = scores_i[keep]
+
+            #     # per-class NMS
+            #     if boxes_k.numel() > 0:
+            #         keep_all = []
+            #         for c in labels_k.unique():
+            #             idx = torch.where(labels_k == c)[0]
+            #             kept = nms(boxes_k[idx], scores_k[idx], iou_threshold=nms_iou)   # change to distance-IoU to improve
+            #             keep_all.append(idx[kept])
+            #         keep_all = torch.cat(keep_all, dim=0)
+            #         # top-K
+            #         if keep_all.numel() > max_detections_per_img:
+            #             topk = scores_k[keep_all].topk(max_detections_per_img).indices
+            #             keep_all = keep_all[topk]
+            #         boxes_k  = boxes_k[keep_all]
+            #         labels_k = labels_k[keep_all]
+            #         scores_k = scores_k[keep_all]
+
+            #     outputs.append({"boxes": boxes_k, "labels": labels_k, "scores": scores_k, "image_id": targets[i]['image_id']})
+
+
+            
+
+    
+    conf_loss = conf_loss / len(dataloader)
+    loc_loss = loc_loss / len(dataloader)
+    test_loss = test_loss / len(dataloader)
+    return {"testing loss": test_loss, "localization loss": loc_loss, "classification loss": conf_loss} #, outputs
+
+
+
+
+
+def SSD_train(model: torch.nn.Module,
+              train_dataloader: torch.utils.data.DataLoader,
+              test_dataloader: torch.utils.data.DataLoader,
+              optimizer: torch.optim.Optimizer,
+              priors_cxcywh: torch.tensor,
+              scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+              tr_iou_thresh: float = 0.5,
+              tr_variances: Tuple[float, float] = (0.1, 0.2),
+              tr_neg_pos_ratio: float = 3.0,
+              te_iou_thresh: float = 0.5,
+              te_variances: Tuple[float, float] = (0.1, 0.2),
+              te_neg_pos_ratio: float = 3.0,
+              epochs: int = 5,
+              early_stopping_rounds: int | None = None,
+              device: str = 'cpu',
+              ):
+    
+    # create results dictionary
+    results = {"train_loss": [],
+               "train_loss_loc": [],
+               "train_loss_conf": [],
+               "test_loss": [],
+               "test_loss_loc": [],
+               "test_loss_conf": [],
+               "epochs": [epochs]}
+    
+    for epoch in tqdm(range(epochs)):
+        train_dict = SSD_train_step(model=model,
+                                    dataloader=train_dataloader,
+                                    optimizer=optimizer,
+                                    priors_cxcywh=priors_cxcywh,
+                                    iou_thresh=tr_iou_thresh,
+                                    variances=tr_variances,
+                                    neg_pos_ratio=tr_neg_pos_ratio,
+                                    device=device)
+        
+        test_dict = SSD_test_step(model=model,
+                                  dataloader=test_dataloader,
+                                  priors_cxcywh=priors_cxcywh,
+                                  iou_thresh=te_iou_thresh,
+                                  variances=te_variances,
+                                  neg_pos_ratio=te_neg_pos_ratio,
+                                  device=device)
+        
+        if scheduler is not None:
+            scheduler.step()
+        
+        print(f"Epoch: {epoch}  |  Train loc loss: {train_dict['localization loss']:.4f}  |  Train class loss: {train_dict['classification loss']:.4f}  |  Test loc loss: {test_dict['localization loss']:.4f}  |  Test class loss: {test_dict['classification loss']:.4f}")
+
+        # update results dictionary
+        results['train_loss'].append(train_dict['training loss'])
+        results['train_loss_loc'].append(train_dict['localization loss'])
+        results['train_loss_conf'].append(train_dict['classification loss'])
+        results['test_loss'].append(test_dict['testing loss'])
+        results['test_loss_loc'].append(test_dict['localization loss'])
+        results['test_loss_conf'].append(test_dict['classification loss'])
+
+        if early_stopping_rounds != None:
+            # if/else statement to monitor consequtive rounds of error
+            # initialize error
+            if epoch == 0:
+                best_error_loc = test_dict['localization loss']
+                best_error_conf = test_dict['classification loss']
+            
+            # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
+            if best_error_loc >= test_dict['localization loss']:
+                best_error_loc = test_dict['localization loss']
+                conseq_rounds_loc = 0
+            # if test loss is going up, best_error stays the same and conseq_rounds counter goes up
+            else:
+                conseq_rounds_loc += 1
+                
+                if conseq_rounds_loc >= early_stopping_rounds:
+                    print(f"Early stopping rounds ({early_stopping_rounds}) reached. (localization)")
+                    results['epochs'][0] = epoch
+                    break
+            
+            # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
+            if best_error_conf >= test_dict['classification loss']:
+                best_error_conf = test_dict['classification loss']
+                conseq_rounds_conf = 0
+            # if test loss is going up, best_error stays the same and conseq_rounds counter goes up
+            else:
+                conseq_rounds_conf += 1
+                
+                if conseq_rounds_conf >= early_stopping_rounds:
+                    print(f"Early stopping rounds ({early_stopping_rounds}) reached. (classification)")
+                    results['epochs'][0] = epoch
+                    break
+
+    # return results
+    return results
+
+
+
+
+
+def plot_losses(losses: Dict[str, List[float]], figsize=(12, 3)) -> None:
+    """
+    losses keys (all required): 
+      "train_loss", "train_loss_loc", "train_loss_conf",
+      "test_loss",  "test_loss_loc",  "test_loss_conf"
+    Values: lists of floats, all the same length.
+    Produces a 1x3 matplotlib figure:
+      (1) train_loss vs idx and test_loss vs idx
+      (2) train_loss_conf vs idx and test_loss_conf vs idx
+      (3) train_loss_loc  vs idx and test_loss_loc  vs idx
+    """
+    required = [
+        "train_loss", "train_loss_loc", "train_loss_conf",
+        "test_loss",  "test_loss_loc",  "test_loss_conf",
+    ]
+    # Key check
+    missing = [k for k in required if k not in losses]
+    if missing:
+        raise KeyError(f"Missing keys: {missing}")
+
+    # Type/length checks
+    lens = []
+    for k in required:
+        v = losses[k]
+        if not isinstance(v, (list, tuple)):
+            raise TypeError(f"Value for '{k}' must be a list/tuple of floats.")
+        lens.append(len(v))
+        if any((not isinstance(x, (int, float)) or np.isnan(float(x)) or np.isinf(float(x))) for x in v):
+            raise ValueError(f"Non-finite numeric in '{k}'.")
+    if len(set(lens)) != 1:
+        raise ValueError(f"All lists must have the same length. Got lengths: {dict(zip(required, lens))}")
+
+    n = lens[0]
+    x = list(range(n))
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize, constrained_layout=True)
+
+    # (1) total loss
+    ax = axes[0]
+    ax.plot(x, losses["train_loss"], label="train")
+    ax.plot(x, losses["test_loss"],  label="test")
+    ax.set_title("Total loss")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("loss")
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+    ax.legend()
+
+    # (2) classification loss
+    ax = axes[1]
+    ax.plot(x, losses["train_loss_conf"], label="train")
+    ax.plot(x, losses["test_loss_conf"],  label="test")
+    ax.set_title("Classification loss")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("loss")
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+    ax.legend()
+
+    # (3) localization loss
+    ax = axes[2]
+    ax.plot(x, losses["train_loss_loc"], label="train")
+    ax.plot(x, losses["test_loss_loc"],  label="test")
+    ax.set_title("Localization loss")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("loss")
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+    ax.legend()
+
+    plt.show()

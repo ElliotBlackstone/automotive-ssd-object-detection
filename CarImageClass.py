@@ -68,6 +68,17 @@ class ImageClass(Dataset):
         # self.annotate_df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
         self.classes = list(self.annotate_df['class'].unique())
         self.classes.sort() # alphabetical sort of classes
+
+        # move background/empty to front of list
+        try:
+            index = self.classes.index('empty')
+        except ValueError:
+            print(f"'{'empty'}' not found in the list.")
+        else:
+            removed_element = self.classes.pop(index)
+            self.classes.insert(0, removed_element)
+
+
         self.class_to_idx = dict(zip(self.classes, range(0, len(self.classes))))
         self.directory = targ_dir
 
@@ -142,6 +153,16 @@ class ImageClass(Dataset):
             img, target = self.transform(img, target)
 
         target['areas'] = (target['boxes'][:,2] - target['boxes'][:,0]).clamp(0, W) * (target['boxes'][:,3] - target['boxes'][:,1]).clamp(0, H)
+
+        # if the image is background
+        if img_df['class'].isin([0]).sum() != 0:
+            target = {
+                  'image_id': torch.tensor([index], dtype=torch.int64),
+                  'labels': torch.zeros((0,), dtype=torch.int64),
+                  'boxes': torch.zeros((0, 4), dtype=torch.float32),
+                  'areas': torch.zeros((0,), dtype=torch.float32),
+                  'iscrowd': torch.zeros((0,), dtype=torch.int64),
+                  }
 
         # Convert back to plain tensors for model consumption
         # target["boxes"] = torch.as_tensor(target["boxes"], dtype=torch.float32)
