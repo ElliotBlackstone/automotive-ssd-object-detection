@@ -2,6 +2,7 @@ import torch
 from torch import nn
 
 import torchvision
+from torchvision.transforms import v2
 from torchvision.ops import box_convert, nms, clip_boxes_to_image, box_iou
 
 import pathlib
@@ -473,3 +474,83 @@ def plot_losses(losses: Dict[str, List[float]], figsize=(12, 3)) -> None:
     ax.legend()
 
     plt.show()
+
+
+
+
+
+
+def collate_detection(batch):
+    images, targets = [], []
+
+    for sample in batch:
+        # tolerate tuple or dict dataset outputs
+        if isinstance(sample, dict):
+            img = sample["image"]
+            tgt = {k: v for k, v in sample.items() if k != "image"}
+        else:
+            img, tgt = sample
+
+        # --- image checks ---
+        if not torch.is_tensor(img):
+            img = torch.as_tensor(img)
+        assert img.ndim == 3 and img.size(0) in (1, 3), "image must be [C,H,W]"
+        img = img.contiguous().to(torch.float32)
+
+        # --- boxes/labels ---
+        b = tgt.get("boxes", torch.empty(0, 4))
+        l = tgt.get("labels", torch.empty(0, dtype=torch.long))
+
+        # If it's a tv BoundingBoxes, safely drop the wrapper now
+        # (only do this in collate, never in dataset transforms)
+        try:
+            from torchvision.tv_tensors import BoundingBoxes
+            if isinstance(b, BoundingBoxes):
+                b = torch.as_tensor(b)
+        except Exception:
+            pass
+
+        b = torch.as_tensor(b, dtype=torch.float32).reshape(-1, 4).contiguous()
+        l = torch.as_tensor(l, dtype=torch.long).reshape(-1).contiguous()
+
+        # --- invariants ---
+        assert b.size(1) == 4, "boxes must be [G,4]"
+        assert b.size(0) == l.size(0), "boxes/labels length mismatch"
+
+        # Ensure empty targets are well-formed tensors
+        if b.numel() == 0:
+            b = b.new_zeros((0, 4))
+            l = l.new_zeros((0,), dtype=torch.long)
+
+        images.append(img)
+        t_fixed = dict(tgt)
+        t_fixed["boxes"] = b
+        t_fixed["labels"] = l
+        targets.append(t_fixed)
+
+    return torch.stack(images, 0), targets
+
+
+
+
+
+class ConditionalIoUCrop(torch.nn.Module):
+    def __init__(self, *, min_area_frac=0.002, **iou_kwargs):
+        super().__init__()
+        self.min_area_frac = float(min_area_frac)
+        self.iou_crop = v2.RandomIoUCrop(**iou_kwargs)
+
+    @torch.no_grad()
+    def forward(self, img, target):
+        # img: Tensor/Image[C,H,W]; target: dict with "boxes"
+        H, W = img.shape[-2], img.shape[-1]
+        boxes = target.get("boxes", None)
+        if boxes is None or boxes.numel() == 0:
+            return img, target
+
+        b = torch.as_tensor(boxes)
+        area = (b[:, 2] - b[:, 0]).clamp(min=0) * (b[:, 3] - b[:, 1]).clamp(min=0)
+        if (area >= self.min_area_frac * (H * W)).any():
+            return self.iou_crop(img, target)   # try crop
+        else:
+            return img, target                  # skip (all boxes too small)
