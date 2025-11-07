@@ -5,11 +5,13 @@ import torchvision
 from torchvision.transforms import v2
 from torchvision.ops import box_convert, nms, clip_boxes_to_image, box_iou
 
-import pathlib
+from pathlib import Path
 from PIL import Image
 from typing import Tuple, Dict, List
 import pandas as pd
 import numpy as np
+import random
+import os
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -28,7 +30,7 @@ from SSD_from_scratch import mySSD
 def SSD_train_step(model: torch.nn.Module,
                    dataloader: torch.utils.data.DataLoader,
                    optimizer: torch.optim.Optimizer,
-                   priors_cxcywh: torch.tensor,
+                   priors_cxcywh: torch.Tensor,
                    iou_thresh: float = 0.5,
                    variances: Tuple[float, float] = (0.1, 0.2),
                    neg_pos_ratio: float = 3.0,
@@ -165,7 +167,7 @@ def SSD_train_step(model: torch.nn.Module,
 
 def SSD_test_step(model: torch.nn.Module,
                   dataloader: torch.utils.data.DataLoader,
-                  priors_cxcywh: torch.tensor,
+                  priors_cxcywh: torch.Tensor,
                   iou_thresh: float = 0.5,
                   variances: Tuple[float, float] = (0.1, 0.2),
                   neg_pos_ratio: float = 3.0,
@@ -313,7 +315,7 @@ def SSD_train(model: torch.nn.Module,
               train_dataloader: torch.utils.data.DataLoader,
               test_dataloader: torch.utils.data.DataLoader,
               optimizer: torch.optim.Optimizer,
-              priors_cxcywh: torch.tensor,
+              priors_cxcywh: torch.Tensor,
               scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
               tr_iou_thresh: float = 0.5,
               tr_variances: Tuple[float, float] = (0.1, 0.2),
@@ -324,7 +326,10 @@ def SSD_train(model: torch.nn.Module,
               epochs: int = 5,
               early_stopping_rounds: int | None = None,
               device: str = 'cpu',
-              ):
+              save_model: bool = False,
+              epoch_save_interval: int | None = None,
+              SAVE_DIR: Path | None = None,
+              ) -> Dict:
     
     # create results dictionary
     results = {"train_loss": [],
@@ -366,6 +371,8 @@ def SSD_train(model: torch.nn.Module,
         results['test_loss_loc'].append(test_dict['localization loss'])
         results['test_loss_conf'].append(test_dict['classification loss'])
 
+
+        # Early stopping rounds
         if early_stopping_rounds != None:
             # if/else statement to monitor consequtive rounds of error
             # initialize error
@@ -398,6 +405,34 @@ def SSD_train(model: torch.nn.Module,
                     print(f"Early stopping rounds ({early_stopping_rounds}) reached. (classification)")
                     results['epochs'][0] = epoch
                     break
+        
+
+        # Saving the model
+        if save_model == True:
+
+            if SAVE_DIR is None:
+                raise TypeError("If the model is to be saved, SAVE_DIR must be specified.")
+            
+            # initialize best error
+            val_err = test_dict['testing loss']
+            if epoch == 0:
+                best_err = val_err
+            
+            # save a rolling "last"
+            if epoch_save_interval is None:
+                save_checkpoint(epoch, model, optimizer, scheduler, scaler=None,
+                                best_metric=best_err, outdir=SAVE_DIR, tag="last")
+
+            # save every epoch_save_interval epochs
+            if (epoch_save_interval is not None) & ((epoch + 1) % epoch_save_interval == 0):
+                save_checkpoint(epoch, model, optimizer, scheduler, scaler=None,
+                                best_metric=best_err, outdir=SAVE_DIR, tag=f"epoch_{epoch+1:03d}")
+
+            # keep a separate "best" snapshot
+            if (best_err is None) or (val_err > best_err):
+                best_err = val_err
+                save_checkpoint(epoch, model, optimizer, scheduler, scaler=None,
+                                best_metric=best_err, outdir=SAVE_DIR, tag="best")
 
     # return results
     return results
@@ -474,6 +509,85 @@ def plot_losses(losses: Dict[str, List[float]], figsize=(12, 3)) -> None:
     ax.legend()
 
     plt.show()
+
+
+
+
+def _atomic_save(obj, path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(obj, tmp)
+    tmp.replace(path)  # atomic on the same filesystem
+
+
+
+def save_checkpoint(
+    epoch: int,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    scaler = None,
+    best_metric: float | None = None,
+    outdir: str | Path = "checkpoints",
+    tag: str = "last",               # "last", "best", "epoch_010", etc.
+):
+    outdir = Path(outdir)
+    # Handle DataParallel/Distributed
+    model_to_save = model.module if hasattr(model, "module") else model
+
+    ckpt = {
+        "epoch": epoch,
+        "model_state": model_to_save.state_dict(),
+        "optimizer_state": optimizer.state_dict() if optimizer else None,
+        "scheduler_state": scheduler.state_dict() if scheduler else None,
+        "scaler_state": scaler.state_dict() if scaler else None,
+        "best_metric": best_metric,
+        # RNG states (optional but helps reproducibility)
+        "rng_state": {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        },
+    }
+    _atomic_save(ckpt, outdir / f"{tag}.ckpt")
+
+
+
+def load_checkpoint(
+    path: str | Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    scaler = None,
+    map_location: str = "cpu",
+):
+    ckpt = torch.load(path, map_location=map_location, weights_only=True)
+
+    # Model (handle DataParallel)
+    target = model.module if hasattr(model, "module") else model
+    target.load_state_dict(ckpt["model_state"])
+
+    # Opt / sched / scaler (if present and provided)
+    if optimizer is not None and ckpt.get("optimizer_state") is not None:
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+    if scheduler is not None and ckpt.get("scheduler_state") is not None:
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+    if scaler is not None and ckpt.get("scaler_state") is not None:
+        scaler.load_state_dict(ckpt["scaler_state"])
+
+    # Restore RNG (optional)
+    rng = ckpt.get("rng_state")
+    if rng:
+        random.setstate(rng["python"])
+        np.random.set_state(rng["numpy"])
+        torch.set_rng_state(rng["torch"])
+        if torch.cuda.is_available() and rng["cuda"] is not None:
+            torch.cuda.set_rng_state_all(rng["cuda"])
+
+    start_epoch = int(ckpt["epoch"]) + 1  # resume at next epoch
+    best_metric = ckpt.get("best_metric")
+    return start_epoch, best_metric
 
 
 
