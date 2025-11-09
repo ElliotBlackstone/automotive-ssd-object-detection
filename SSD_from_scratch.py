@@ -1,7 +1,6 @@
 import torch
 from torch import nn
-from torchvision.ops import box_convert
-from torchvision.ops import box_iou
+from torchvision.ops import box_convert, box_iou, distance_box_iou, complete_box_iou
 
 import pathlib
 from PIL import Image
@@ -331,88 +330,6 @@ class mySSD(nn.Module):
     
 
 
-    # @torch.no_grad()
-    # def predict(self,
-    #             x: torch.Tensor,
-    #             score_thresh: float = 0.05,
-    #             nms_iou: float = 0.5,
-    #             max_per_img: int = 200,
-    #             class_agnostic: bool = False) -> List[torch.Tensor]:
-    #     """
-    #     Returns a list of length B (batch size).
-    #     Each element is a (K_i, 6) tensor: [x1, y1, x2, y2, score, label],
-    #     where label ∈ {1..C-1} corresponds to foreground classes (background dropped).
-    #     """
-    #     self.eval()
-    #     loc_all, conf_all = self(x)              # (B,P,4), (B,P,C)
-    #     device = loc_all.device
-    #     B, P, C = conf_all.shape
-    #     assert P == self.priors.size(0), "P mismatch with priors"
-    #     assert C == self.num_classes and C >= 2, "num_classes must include background"
-
-    #     # 1) class scores (drop background)
-    #     scores_all = conf_all.softmax(dim=-1)[..., 1:]   # (B,P,C-1)
-    #     num_fg = C - 1
-
-    #     H, W = self.img_h, self.img_w
-    #     outputs = []
-
-    #     for b in range(B):
-    #         # 2) decode using provided function: normalized cxcywh in [0,1]
-    #         #    loc for this image: (P,4), priors: (P,4)
-    #         boxes_cxcywh = self.decode_ssd(loc_all[b], self.priors.to(device), variances=(self.variance_center, self.variance_size))
-    #         # 3) cxcywh -> pixel xyxy, clamp
-    #         cx, cy, w, h = boxes_cxcywh.unbind(dim=1)
-    #         x1 = (cx - 0.5 * w).clamp_(0, 1) * W
-    #         y1 = (cy - 0.5 * h).clamp_(0, 1) * H
-    #         x2 = (cx + 0.5 * w).clamp_(0, 1) * W
-    #         y2 = (cy + 0.5 * h).clamp_(0, 1) * H
-    #         b_boxes_xyxy = torch.stack([x1, y1, x2, y2], dim=1)       # (P,4)
-
-
-    #         # 4) threshold scores, gather
-    #         b_scores = scores_all[b]                                  # (P,num_fg)
-    #         keep_mask = b_scores > score_thresh                       # (P,num_fg)
-    #         if not keep_mask.any():
-    #             outputs.append(torch.empty(0, 6, device=b_boxes_xyxy.device))
-    #             continue
-
-    #         pri_idx, cls_idx = keep_mask.nonzero(as_tuple=True)       # (M,) , cls_idx ∈ [0..C-2]
-    #         sel_boxes  = b_boxes_xyxy[pri_idx]                        # (M,4)
-    #         sel_scores = b_scores[pri_idx, cls_idx]                   # (M,)
-    #         sel_labels = cls_idx                                      # (M,)
-
-    #         # 5) NMS (per-class by default)
-    #         if class_agnostic:
-    #             keep = self.diou_nms(sel_boxes, sel_scores, diou_threshold=nms_iou)
-    #         else:
-    #             kept_list = []
-    #             for cls in sel_labels.unique():
-    #                 m = (sel_labels == cls)
-    #                 if m.any():
-    #                     idx_local = self.diou_nms(sel_boxes[m], sel_scores[m], diou_threshold=nms_iou)
-    #                     # map back to original indices within sel_*
-    #                     kept_list.append(m.nonzero(as_tuple=True)[0][idx_local])
-    #             keep = torch.cat(kept_list, dim=0)
-    #             # optional: re-sort by score if you want global top-K by confidence
-    #             keep = keep[sel_scores[keep].argsort(descending=True)]
-
-    #         keep = keep[:max_per_img]
-    #         dets = torch.cat([
-    #             sel_boxes[keep],
-    #             sel_scores[keep].unsqueeze(1),
-    #             (sel_labels[keep] + 1).to(sel_boxes.dtype).unsqueeze(1) # shift from 0, ..., C-2 to 1, ..., C-1
-    #         ], dim=1)  # (K,6)
-
-    #         outputs.append(dets)
-
-    #         outputs.append({
-    #         "labels": (sel_labels[keep] + 1).tolist(),
-    #         "scores": sel_scores[keep].tolist(),
-    #         "boxes": sel_boxes[keep]
-    #         })
-
-    #     return outputs
     
 
 
@@ -427,9 +344,9 @@ class mySSD(nn.Module):
         """
         Returns a list of length B; each element is a dict:
         {
-            'labels': List[int],              # 1..C-1
-            'scores': List[float],            # confidences
-            'boxes' : Tensor[K,4] (xyxy)      # pixel coords on (H,W)
+            'labels': Tensor, contains values 0, ..., C-1
+            'scores': Tensor, contains confidences
+            'boxes' : Tensor[K,4] (xyxy)
         }
         """
         self.eval()
@@ -465,36 +382,38 @@ class mySSD(nn.Module):
 
             if not keep_mask.any():
                 out.append({
-                    "labels": [],
-                    "scores": [],
+                    "labels": torch.empty(0, dtype=torch.int64, device=device),
+                    "scores": torch.empty(0, dtype=torch.float32, device=device),
                     "boxes": boxes_xyxy.new_zeros((0, 4))
                 })
                 continue
 
-            pri_idx, cls0_idx = keep_mask.nonzero(as_tuple=True)                  # 0-based class ids
+            pri_idx, cls0_idx = keep_mask.nonzero(as_tuple=True)                   # 0-based class ids
             sel_boxes  = boxes_xyxy[pri_idx]                                       # (M,4)
             sel_scores = b_scores[pri_idx, cls0_idx]                               # (M,)
-            sel_labels0 = cls0_idx                                                # (M,)
+            sel_labels0 = cls0_idx                                                 # (M,)
 
             # NMS
             if class_agnostic:
-                keep = self.diou_nms(sel_boxes, sel_scores, diou_threshold=nms_thresh)
+                keep = self.iou_nms(sel_boxes, sel_scores, iou_threshold=nms_thresh)
+                # ensure highest-score first before truncation
+                keep = keep[sel_scores[keep].argsort(descending=True)]
             else:
                 kept = []
                 for c in sel_labels0.unique():
                     m = (sel_labels0 == c)
                     if m.any():
-                        idx_local = self.diou_nms(sel_boxes[m], sel_scores[m], diou_threshold=nms_thresh)
+                        idx_local = self.iou_nms(sel_boxes[m], sel_scores[m], iou_threshold=nms_thresh)
                         kept.append(m.nonzero(as_tuple=True)[0][idx_local])
                 keep = torch.cat(kept, dim=0)
                 keep = keep[sel_scores[keep].argsort(descending=True)]
 
             keep = keep[:max_per_img]
 
-            # shift to 1..C-1 for output
-            labels_out = (sel_labels0[keep] + 1).tolist()                          # List[int]
-            scores_out = sel_scores[keep].tolist()                                 # List[float]
-            boxes_out  = sel_boxes[keep]                                           # Tensor[K,4]
+            
+            labels_out = sel_labels0[keep].to(torch.int64)                                         # Tensor
+            scores_out = sel_scores[keep].to(torch.float32)                                        # Tensor
+            boxes_out  = sel_boxes[keep].to(torch.float32)                                         # Tensor[K,4]
 
             out.append({
                 "labels": labels_out,
@@ -506,21 +425,80 @@ class mySSD(nn.Module):
 
 
 
+    # @staticmethod
+    # def diou_nms(boxes: torch.Tensor,
+    #              scores: torch.Tensor,
+    #              diou_threshold: float,
+    #              eps: float = 1e-9) -> torch.Tensor:
+    #     """
+    #     boxes:  (N,4) xyxy in absolute coords
+    #     scores: (N,)
+    #     returns indices of kept boxes (like torchvision.nms), sorted by score desc
+    #     """
+    #     if boxes.numel() == 0:
+    #         return boxes.new_zeros((0,), dtype=torch.long)
+
+    #     x1, y1, x2, y2 = boxes.unbind(dim=1)
+    #     areas = (x2 - x1).clamp_(min=0) * (y2 - y1).clamp_(min=0)
+
+    #     order = scores.argsort(descending=True)
+    #     keep = []
+
+    #     while order.numel() > 0:
+    #         i = order[0].item()
+    #         keep.append(i)
+    #         if order.numel() == 1:
+    #             break
+
+    #         rest = order[1:]
+
+    #         # Intersection
+    #         xx1 = torch.maximum(x1[i], x1[rest])
+    #         yy1 = torch.maximum(y1[i], y1[rest])
+    #         xx2 = torch.minimum(x2[i], x2[rest])
+    #         yy2 = torch.minimum(y2[i], y2[rest])
+
+    #         iw = (xx2 - xx1).clamp(min=0)
+    #         ih = (yy2 - yy1).clamp(min=0)
+    #         inter = iw * ih
+    #         union = areas[i] + areas[rest] - inter + eps
+    #         iou = inter / union
+
+    #         # Center distance squared
+    #         cx_i = (x1[i] + x2[i]) * 0.5
+    #         cy_i = (y1[i] + y2[i]) * 0.5
+    #         cx_j = (x1[rest] + x2[rest]) * 0.5
+    #         cy_j = (y1[rest] + y2[rest]) * 0.5
+    #         rho2 = (cx_i - cx_j)**2 + (cy_i - cy_j)**2
+
+    #         # Enclosing box diagonal squared
+    #         ex1 = torch.minimum(x1[i], x1[rest])
+    #         ey1 = torch.minimum(y1[i], y1[rest])
+    #         ex2 = torch.maximum(x2[i], x2[rest])
+    #         ey2 = torch.maximum(y2[i], y2[rest])
+    #         cw = (ex2 - ex1).clamp(min=0)
+    #         ch = (ey2 - ey1).clamp(min=0)
+    #         c2 = cw**2 + ch**2 + eps
+
+    #         diou = iou - rho2 / c2
+
+    #         # Keep boxes whose DIoU ≤ threshold (i.e., not “too similar + close”)
+    #         mask = diou <= diou_threshold
+    #         order = rest[mask]
+
+    #     return torch.tensor(keep, device=boxes.device, dtype=torch.long)
+    
     @staticmethod
-    def diou_nms(boxes: torch.Tensor,
-                 scores: torch.Tensor,
-                 diou_threshold: float,
-                 eps: float = 1e-9) -> torch.Tensor:
+    def iou_nms(boxes: torch.Tensor,
+                scores: torch.Tensor,
+                iou_threshold: float) -> torch.Tensor:
         """
-        boxes:  (N,4) xyxy in absolute coords
+        boxes:  (N,4) xyxy, strictly x1<x2, y1<y2 (as torchvision expects)
         scores: (N,)
-        returns indices of kept boxes (like torchvision.nms), sorted by score desc
+        returns LongTensor indices of kept boxes (sorted by score desc)
         """
         if boxes.numel() == 0:
             return boxes.new_zeros((0,), dtype=torch.long)
-
-        x1, y1, x2, y2 = boxes.unbind(dim=1)
-        areas = (x2 - x1).clamp_(min=0) * (y2 - y1).clamp_(min=0)
 
         order = scores.argsort(descending=True)
         keep = []
@@ -530,56 +508,25 @@ class mySSD(nn.Module):
             keep.append(i)
             if order.numel() == 1:
                 break
-
             rest = order[1:]
 
-            # Intersection
-            xx1 = torch.maximum(x1[i], x1[rest])
-            yy1 = torch.maximum(y1[i], y1[rest])
-            xx2 = torch.minimum(x2[i], x2[rest])
-            yy2 = torch.minimum(y2[i], y2[rest])
-
-            iw = (xx2 - xx1).clamp(min=0)
-            ih = (yy2 - yy1).clamp(min=0)
-            inter = iw * ih
-            union = areas[i] + areas[rest] - inter + eps
-            iou = inter / union
-
-            # Center distance squared
-            cx_i = (x1[i] + x2[i]) * 0.5
-            cy_i = (y1[i] + y2[i]) * 0.5
-            cx_j = (x1[rest] + x2[rest]) * 0.5
-            cy_j = (y1[rest] + y2[rest]) * 0.5
-            rho2 = (cx_i - cx_j)**2 + (cy_i - cy_j)**2
-
-            # Enclosing box diagonal squared
-            ex1 = torch.minimum(x1[i], x1[rest])
-            ey1 = torch.minimum(y1[i], y1[rest])
-            ex2 = torch.maximum(x2[i], x2[rest])
-            ey2 = torch.maximum(y2[i], y2[rest])
-            cw = (ex2 - ex1).clamp(min=0)
-            ch = (ey2 - ey1).clamp(min=0)
-            c2 = cw**2 + ch**2 + eps
-
-            diou = iou - rho2 / c2
-
-            # Keep boxes whose DIoU ≤ threshold (i.e., not “too similar + close”)
-            mask = diou <= diou_threshold
-            order = rest[mask]
+            # pairwise DIoU between the top-1 box and the remaining boxes
+            iou = complete_box_iou(boxes[i].unsqueeze(0), boxes[rest]).squeeze(0)
+            # suppress boxes "too similar & close" to the current top box
+            order = rest[iou <= iou_threshold]
 
         return torch.tensor(keep, device=boxes.device, dtype=torch.long)
 
 
 
     @staticmethod
-    def encode_ssd(
-        gt_boxes_cxcywh,          # [G,4] normalized (cx,cy,w,h)
-        gt_labels,                # [G]
-        priors_cxcywh,            # [P,4] normalized (cx,cy,w,h)
-        iou_thresh=0.5,
-        variances=(0.1, 0.2),
-        background_class=0
-    ):
+    def encode_ssd(gt_boxes_cxcywh: torch.Tensor,          # [G,4] normalized (cx,cy,w,h)
+                   gt_labels: torch.Tensor,                # [G]
+                   priors_cxcywh: torch.Tensor,            # [P,4] normalized (cx,cy,w,h)
+                   iou_thresh: float = 0.5,
+                   variances: Tuple[float, float] = (0.1, 0.2),
+                   background_class: int = 0
+                   ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
         loc_target: [P,4] (tx,ty,tw,th) per prior (positives encoded, negatives filled too)
@@ -608,7 +555,7 @@ class mySSD(nn.Module):
         priors_xyxy     = box_convert(boxes=priors_cxcywh, in_fmt='cxcywh', out_fmt='xyxy').clamp(0, 1)
 
         # IoU and matching
-        iou = box_iou(priors_xyxy, gt_boxes_xyxy)           # [P,G]
+        iou = complete_box_iou(priors_xyxy, gt_boxes_xyxy)           # [P,G]
         # Force bipartite matches: each GT gets its best prior
         best_prior_per_gt = iou.argmax(dim=0)                # [G]
         iou[best_prior_per_gt, torch.arange(G, device=device)] = 2.0
@@ -635,13 +582,16 @@ class mySSD(nn.Module):
         gt_labels = gt_labels.to(device=device)
         matched_labels = gt_labels[best_gt_per_prior]        # [P]
         cls_target = torch.full((P,), background_class, dtype=matched_labels.dtype, device=device)
-        cls_target[pos_mask] = matched_labels[pos_mask]
+        cls_target[pos_mask] = matched_labels[pos_mask] + 1
 
         return loc_target, cls_target, pos_mask, matched_gt_cxcywh
 
 
     @staticmethod
-    def decode_ssd(loc, priors, variances=(0.1, 0.2)):
+    def decode_ssd(loc: torch.Tensor,
+                   priors: torch.Tensor,
+                   variances: Tuple[float, float]=(0.1, 0.2)
+                   ) -> torch.Tensor:
         """
         loc:   [num_priors, 4]  (tx, ty, tw, th)
         priors:[num_priors, 4]  (cx_a, cy_a, w_a, h_a), normalized [0,1]

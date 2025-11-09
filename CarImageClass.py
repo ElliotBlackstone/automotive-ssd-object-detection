@@ -26,9 +26,11 @@ class ImageClass(Dataset):
                  transform=None,
                  file_pct: float = 1,
                  rand_seed: int = 724,
+                 device: str = 'cpu',
                  ) -> None:
         
         # 3. Create class attributes
+        self.device = device
         # Get all image paths
         if file_list is None:
             all_paths = list(pathlib.Path(targ_dir).glob("*.jpg"))
@@ -67,16 +69,17 @@ class ImageClass(Dataset):
         # there should only be one .csv file in the train/test directory, so list(pathlib.Path(targ_dir).glob("*.csv"))[0] gets it!
         # self.annotate_df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
         self.classes = list(self.annotate_df['class'].unique())
+        self.classes.remove('empty')
         self.classes.sort() # alphabetical sort of classes
 
         # move background/empty to front of list
-        try:
-            index = self.classes.index('empty')
-        except ValueError:
-            print(f"'{'empty'}' not found in the list.")
-        else:
-            removed_element = self.classes.pop(index)
-            self.classes.insert(0, removed_element)
+        # try:
+        #     index = self.classes.index('empty')
+        # except ValueError:
+        #     print(f"'{'empty'}' not found in the list.")
+        # else:
+        #     removed_element = self.classes.pop(index)
+        #     self.classes.insert(0, removed_element)
 
 
         self.class_to_idx = dict(zip(self.classes, range(0, len(self.classes))))
@@ -100,7 +103,7 @@ class ImageClass(Dataset):
         img is a torch.Tensor and target is a Dictonary of the form
         target = {
                   "boxes":   Tensor[n_i, 4]  # float32, xyxy, absolute pixels
-                  "labels":  Tensor[n_i]     # int64, in {1..num_classes}
+                  "labels":  Tensor[n_i]     # int64, in {0, ..., num_classes-1}
                   "image_id": Tensor[1]      # int64 unique id i.e. index
                   "area":    Tensor[n_i]     # float32 (box area in pixels)
                   "iscrowd": Tensor[n_i]     # int64 (0 or 1), 0 if you do not use crowd
@@ -112,57 +115,61 @@ class ImageClass(Dataset):
         # image_path = self.paths[index]
         img_name = self.paths[index].stem + '.jpg'
         img_df = self.annotate_df[self.annotate_df['filename'] == img_name]
-        img_df.loc[:, 'class'] = img_df['class'].map(self.class_to_idx)
+        img_df.loc[:, 'class'] = img_df['class'].map(dict(self.class_to_idx, empty='empty'))
         
         # obj_dict = img_df[['class', 'xmin', 'xmax', 'ymin', 'ymax']].to_dict(orient='records')
         # class_name  = self.paths[index].parent.name # expects path in data_folder/class_name/image.jpeg
         # class_idx = self.class_to_idx[class_name]
 
-        # initialize boxes, labels, areas
-        boxes = torch.zeros(len(img_df), 4)
-        labels = torch.zeros(len(img_df), dtype=torch.int64)
-        areas = torch.zeros(len(img_df))
-        # populate via loop
-        for i in range(len(img_df)):
-            j = 0
-            labels[i] = torch.tensor(img_df.iloc[i]['class'], dtype=torch.int64)
-
-            for coord in ['xmin', 'ymin', 'xmax', 'ymax']:
-                boxes[i, j] = img_df.iloc[i][coord]
-                j = j + 1
-
-            # areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
-
-        iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
 
         # Wrap into tv_tensors so transforms know how to move boxes with the image
         _, H, W = img.shape
-        boxes = tv_tensors.BoundingBoxes(
-            boxes, format="XYXY", canvas_size=(H, W)
-        )
 
-        target = {
-                  'image_id': torch.tensor([index], dtype=torch.int64),
-                  'labels': labels,
-                  'boxes': boxes,
-                  'areas': areas,
-                  'iscrowd': iscrowd,
-                  }
-        
-        if self.transform is not None:
-            img, target = self.transform(img, target)
+        if 'empty' not in img_df['class'].unique():
+            # initialize boxes, labels, areas
+            boxes = torch.zeros(len(img_df), 4)
+            labels = torch.zeros(len(img_df), dtype=torch.int64)
+            areas = torch.zeros(len(img_df))
+            # populate via loop
+            for i in range(len(img_df)):
+                j = 0
+                labels[i] = torch.tensor(img_df.iloc[i]['class'], dtype=torch.int64)
 
-        target['areas'] = (target['boxes'][:,2] - target['boxes'][:,0]).clamp(0, W) * (target['boxes'][:,3] - target['boxes'][:,1]).clamp(0, H)
+                for coord in ['xmin', 'ymin', 'xmax', 'ymax']:
+                    boxes[i, j] = img_df.iloc[i][coord]
+                    j = j + 1
+
+                # areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
+
+            iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
+
+            boxes = tv_tensors.BoundingBoxes(boxes, format="XYXY", canvas_size=(H, W))
+
+            target = {
+                    'image_id': torch.tensor([index], dtype=torch.int64).to(device=self.device),
+                    'labels': labels.to(device=self.device, dtype=torch.int64),
+                    'boxes': boxes.to(device=self.device, dtype=torch.float32),
+                    'areas': areas.to(device=self.device, dtype=torch.float32),
+                    'iscrowd': iscrowd.to(device=self.device, dtype=torch.int64),
+                    }
+            
+            if self.transform is not None:
+                img, target = self.transform(img, target)
+
+            target['areas'] = (target['boxes'][:,2] - target['boxes'][:,0]).clamp(0, W) * (target['boxes'][:,3] - target['boxes'][:,1]).clamp(0, H)
 
         # if the image is background
-        if img_df['class'].isin([0]).sum() != 0:
+        else:
             target = {
-                  'image_id': torch.tensor([index], dtype=torch.int64),
-                  'labels': torch.zeros((0,), dtype=torch.int64),
-                  'boxes': torch.zeros((0, 4), dtype=torch.float32),
-                  'areas': torch.zeros((0,), dtype=torch.float32),
-                  'iscrowd': torch.zeros((0,), dtype=torch.int64),
+                  'image_id': torch.tensor([index], dtype=torch.int64, device=self.device),
+                  'labels': torch.zeros((0,), dtype=torch.int64, device=self.device),
+                  'boxes': tv_tensors.BoundingBoxes(torch.zeros((0,4), dtype=torch.float32, device=self.device), format="XYXY", canvas_size=(H, W)),
+                  'areas': torch.zeros((0,), dtype=torch.float32, device=self.device),
+                  'iscrowd': torch.zeros((0,), dtype=torch.int64, device=self.device),
                   }
+            
+            if self.transform is not None:
+                img, target = self.transform(img, target)
 
         # Convert back to plain tensors for model consumption
         # target["boxes"] = torch.as_tensor(target["boxes"], dtype=torch.float32)
@@ -280,6 +287,7 @@ def make_train_test_split(full_set: ImageClass,
                           rand_state: int = None,
                           transform_train = None,
                           transform_test = None,
+                          device: str = 'cpu',
                           ) -> Tuple[ImageClass, ImageClass]:
         """
         Create a train/test split of an image class.
@@ -306,8 +314,8 @@ def make_train_test_split(full_set: ImageClass,
         test_files = test_df['filename'].to_list()
 
         # create training/testing ImageClass files
-        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files, transform=transform_train)
-        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files, transform=transform_test)
+        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files, transform=transform_train, device=device)
+        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files, transform=transform_test, device=device)
 
         return train_IC, test_IC
 
