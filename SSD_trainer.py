@@ -5,6 +5,7 @@ import torchvision
 from torchvision.transforms import v2
 from torchvision.ops import box_convert, nms, clip_boxes_to_image, box_iou
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
+from torchvision.tv_tensors import BoundingBoxes as TVBoxes
 
 from pathlib import Path
 from PIL import Image
@@ -320,11 +321,17 @@ def SSD_train(model: torch.nn.Module,
               epoch_save_interval: int | None = None,
               SAVE_DIR: Path | None = None,
               timing: bool = False,
+              past_train_dict: Dict | None = None,
               ) -> Dict:
     
     # device check
     if (device != 'cpu') & (device != 'cuda'):
         raise ValueError(f"device must be 'cpu' or 'cuda', recieved {device}.")
+    
+    if past_train_dict is not None:
+        past_epochs = past_train_dict['epochs'][0]
+    else:
+        past_epochs = 0
     
     # create results dictionary
     results = {"train_loss": [],
@@ -334,7 +341,7 @@ def SSD_train(model: torch.nn.Module,
                "test_loss_loc": [],
                "test_loss_conf": [],
                "mAP": [],
-               "epochs": [epochs],
+               "epochs": [epochs + past_epochs],
                "training timing": [],
                "testing timing": [],}
     
@@ -361,7 +368,7 @@ def SSD_train(model: torch.nn.Module,
         if scheduler is not None:
             scheduler.step(test_dict['testing loss'])
         
-        print(f"Epoch: {epoch}  |  mAP: {test_dict['mAP']['map_50']:.4f}  |  Train loc loss: {train_dict['localization loss']:.4f}  |  Train class loss: {train_dict['classification loss']:.4f}  |  Test loc loss: {test_dict['localization loss']:.4f}  |  Test class loss: {test_dict['classification loss']:.4f}")
+        print(f"Epoch: {epoch+past_epochs}  |  mAP: {test_dict['mAP']['map_50']:.4f}  |  Train loc loss: {train_dict['localization loss']:.4f}  |  Train class loss: {train_dict['classification loss']:.4f}  |  Test loc loss: {test_dict['localization loss']:.4f}  |  Test class loss: {test_dict['classification loss']:.4f}")
 
         # update results dictionary
         results['train_loss'].append(train_dict['training loss'])
@@ -393,7 +400,7 @@ def SSD_train(model: torch.nn.Module,
                 
                 if conseq_rounds_loc >= early_stopping_rounds:
                     print(f"Early stopping rounds ({early_stopping_rounds}) reached. (localization)")
-                    results['epochs'][0] = epoch
+                    results['epochs'][0] = epoch+past_epochs
                     break
             
             # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
@@ -406,8 +413,10 @@ def SSD_train(model: torch.nn.Module,
                 
                 if conseq_rounds_conf >= early_stopping_rounds:
                     print(f"Early stopping rounds ({early_stopping_rounds}) reached. (classification)")
-                    results['epochs'][0] = epoch
+                    results['epochs'][0] = epoch+past_epochs
                     break
+        
+
         
 
         # Saving the model
@@ -421,25 +430,27 @@ def SSD_train(model: torch.nn.Module,
             if epoch == 0:
                 best_err = val_err
             
+            loss_dict = merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results
+            
             # save a rolling "last"
             if epoch_save_interval is None:
-                save_checkpoint(epoch=epoch, model=model, loss_dict=results, optimizer=optimizer, scheduler=scheduler, scaler=None,
+                save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
                                 best_metric=best_err, outdir=SAVE_DIR, tag="last")
 
             # save every epoch_save_interval epochs
             if epoch_save_interval is not None:
                 if (epoch + 1) % epoch_save_interval == 0:
-                    save_checkpoint(epoch=epoch, model=model, loss_dict=results, optimizer=optimizer, scheduler=scheduler, scaler=None,
-                                    best_metric=best_err, outdir=SAVE_DIR, tag=f"epoch_{epoch+1:03d}")
+                    save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
+                                    best_metric=best_err, outdir=SAVE_DIR, tag=f"epoch_{epoch+past_epochs+1:03d}")
 
             # keep a separate "best" snapshot
             if (save_best_model == True) & (val_err > best_err):
                 best_err = val_err
-                save_checkpoint(epoch=epoch, model=model, loss_dict=results, optimizer=optimizer, scheduler=scheduler, scaler=None,
+                save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
                                 best_metric=best_err, outdir=SAVE_DIR, tag="best")
 
     # return results
-    return results
+    return merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results
 
 
 
@@ -485,58 +496,22 @@ def build_targets(priors_cxcywh: torch.Tensor,
     return pos_mask, loc_t[pos_mask], cls_t
 
 
-# original build targets code within SSD_train_step
-        # H, W = images.shape[-2], images.shape[-1]     # image size - should be 300x300
-        # norm = torch.tensor([W, H, W, H], device=device, dtype=torch.float32)
 
-        # loc_t_list   = []
-        # cls_t_list   = []
-        # pos_mask_lst = []
-
-        # for i in range(N):
-        #     # normalize GT to [0,1] and convert to cxcywh
-        #     gt_xyxy_px = targets[i]['boxes'].to(device=device, dtype=torch.float32)
-        #     gt_labels  = targets[i]['labels'].to(device=device)
-        #     if gt_xyxy_px.numel() == 0:
-        #         gt_cxcywh = gt_xyxy_px.new_zeros((0,4))
-        #     else:
-        #         gt_xyxy = gt_xyxy_px / norm
-        #         gt_cxcywh = box_convert(gt_xyxy, in_fmt='xyxy', out_fmt='cxcywh')
-
-        #     loc_t, cls_t, pos_mask, _ = mySSD.encode_ssd(
-        #         gt_cxcywh, gt_labels, priors_cxcywh,
-        #         iou_thresh=iou_thresh, variances=variances, background_class=0
-        #     )
-        #     # shapes: [P,4], [P], [P]
-        #     loc_t_list.append(loc_t)
-        #     cls_t_list.append(cls_t)
-        #     pos_mask_lst.append(pos_mask)
-
-        # loc_t   = torch.stack(loc_t_list, dim=0).to(device)      # [N,P,4]
-        # cls_t   = torch.stack(cls_t_list, dim=0).to(device)      # [N,P]
-        # pos_mask = torch.stack(pos_mask_lst, dim=0).to(device)   # [N,P] bool
-        # neg_mask = ~pos_mask
-
-        # # number of positives per image (avoid zero division)
-        # num_pos_per_img = pos_mask.sum(dim=1)                    # [N]
-        # total_pos = num_pos_per_img.sum().clamp_min(1).float()   # scalar
-
-
-
-def plot_losses(losses: Dict[str, List[float]], figsize=(12, 3)) -> None:
+def plot_losses(losses: Dict[str, List[float]], figsize=(12, 8)) -> None:
     """
     losses keys (all required): 
       "train_loss", "train_loss_loc", "train_loss_conf",
-      "test_loss",  "test_loss_loc",  "test_loss_conf"
+      "test_loss",  "test_loss_loc",  "test_loss_conf", "mAP"
     Values: lists of floats, all the same length.
-    Produces a 1x3 matplotlib figure:
+    Produces a 2x2 matplotlib figure:
       (1) train_loss vs idx and test_loss vs idx
       (2) train_loss_conf vs idx and test_loss_conf vs idx
       (3) train_loss_loc  vs idx and test_loss_loc  vs idx
+      (4) mAP vs idx
     """
     required = [
         "train_loss", "train_loss_loc", "train_loss_conf",
-        "test_loss",  "test_loss_loc",  "test_loss_conf",
+        "test_loss",  "test_loss_loc",  "test_loss_conf", "mAP"
     ]
     # Key check
     missing = [k for k in required if k not in losses]
@@ -545,7 +520,8 @@ def plot_losses(losses: Dict[str, List[float]], figsize=(12, 3)) -> None:
 
     # Type/length checks
     lens = []
-    for k in required:
+    for k in ["train_loss", "train_loss_loc", "train_loss_conf",
+              "test_loss",  "test_loss_loc",  "test_loss_conf"]:
         v = losses[k]
         if not isinstance(v, (list, tuple)):
             raise TypeError(f"Value for '{k}' must be a list/tuple of floats.")
@@ -558,10 +534,10 @@ def plot_losses(losses: Dict[str, List[float]], figsize=(12, 3)) -> None:
     n = lens[0]
     x = list(range(n))
 
-    fig, axes = plt.subplots(1, 3, figsize=figsize, constrained_layout=True)
+    fig, axes = plt.subplots(2, 2, figsize=figsize, constrained_layout=True)
 
     # (1) total loss
-    ax = axes[0]
+    ax = axes[0,0]
     ax.plot(x, losses["train_loss"], label="train")
     ax.plot(x, losses["test_loss"],  label="test")
     ax.set_title("Total loss")
@@ -570,8 +546,21 @@ def plot_losses(losses: Dict[str, List[float]], figsize=(12, 3)) -> None:
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
     ax.legend()
 
-    # (2) classification loss
-    ax = axes[1]
+    # (2) mAP
+    mAP = []
+    for i in range(len(losses['mAP'])):
+        mAP.append(losses['mAP'][i]['map_50'])
+    
+    ax = axes[0,1]
+    ax.plot(x, mAP, label="mAP")
+    ax.set_title("mAP")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("mAP")
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+    ax.legend()
+
+    # (3) classification loss
+    ax = axes[1,0]
     ax.plot(x, losses["train_loss_conf"], label="train")
     ax.plot(x, losses["test_loss_conf"],  label="test")
     ax.set_title("Classification loss")
@@ -580,8 +569,8 @@ def plot_losses(losses: Dict[str, List[float]], figsize=(12, 3)) -> None:
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
     ax.legend()
 
-    # (3) localization loss
-    ax = axes[2]
+    # (4) localization loss
+    ax = axes[1,1]
     ax.plot(x, losses["train_loss_loc"], label="train")
     ax.plot(x, losses["test_loss_loc"],  label="test")
     ax.set_title("Localization loss")
@@ -680,55 +669,88 @@ def load_checkpoint(
 
 
 
-def collate_detection(batch):
-    images, targets = [], []
 
+def collate_detection(batch):
+    imgs, tgts = [], []
     for sample in batch:
-        # tolerate tuple or dict dataset outputs
         if isinstance(sample, dict):
             img = sample["image"]
-            tgt = {k: v for k, v in sample.items() if k != "image"}
+            tgt = sample
         else:
             img, tgt = sample
 
-        # --- image checks ---
-        if not torch.is_tensor(img):
-            img = torch.as_tensor(img)
-        assert img.ndim == 3 and img.size(0) in (1, 3), "image must be [C,H,W]"
-        img = img.contiguous().to(torch.float32)
+        # assume dataset already produced float32 CxHxW tensors
+        # avoid redundant copies; only enforce contiguous when stacking
+        assert torch.is_tensor(img) and img.ndim == 3 and img.size(0) in (1,3)
+        imgs.append(img)
 
-        # --- boxes/labels ---
-        b = tgt.get("boxes", torch.empty(0, 4))
-        l = tgt.get("labels", torch.empty(0, dtype=torch.long))
+        b = tgt.get("boxes", None)
+        l = tgt.get("labels", None)
 
-        # If it's a tv BoundingBoxes, safely drop the wrapper now
-        # (only do this in collate, never in dataset transforms)
-        try:
-            from torchvision.tv_tensors import BoundingBoxes
-            if isinstance(b, BoundingBoxes):
-                b = torch.as_tensor(b)
-        except Exception:
-            pass
+        if isinstance(b, TVBoxes):
+            b = b.as_subclass(torch.Tensor)  # cheap view, keeps dtype/stride
+        if b is None:
+            b = torch.zeros((0,4), dtype=torch.float32)
+        else:
+            b = b.to(dtype=torch.float32)
+            b = b.view(-1, 4)  # no-op if already [G,4]
 
-        b = torch.as_tensor(b, dtype=torch.float32).reshape(-1, 4).contiguous()
-        l = torch.as_tensor(l, dtype=torch.long).reshape(-1).contiguous()
+        if l is None:
+            l = torch.zeros((0,), dtype=torch.long)
+        else:
+            l = l.to(dtype=torch.long).view(-1)
 
-        # --- invariants ---
-        assert b.size(1) == 4, "boxes must be [G,4]"
-        assert b.size(0) == l.size(0), "boxes/labels length mismatch"
+        # minimal target dict
+        tgts.append({
+            "boxes": b.contiguous(),          # keep contiguous small tensors
+            "labels": l.contiguous(),
+            # include only what your loss needs; if you need ids:
+            "image_id": tgt.get("image_id", None),
+            # add iscrowd/area if your loss needs them; avoid unnecessary keys
+        })
 
-        # Ensure empty targets are well-formed tensors
-        if b.numel() == 0:
-            b = b.new_zeros((0, 4))
-            l = l.new_zeros((0,), dtype=torch.long)
+    # one contiguous copy here is fine
+    return torch.stack([im.contiguous() for im in imgs], 0), tgts
 
-        images.append(img)
-        t_fixed = dict(tgt)
-        t_fixed["boxes"] = b
-        t_fixed["labels"] = l
-        targets.append(t_fixed)
 
-    return torch.stack(images, 0), targets
+
+def merge_dicts_preserve_order(d1: dict, d2: dict) -> dict:
+    # sanity: same keys and key order from d1 is kept
+    if set(d1.keys()) != set(d2.keys()):
+        raise KeyError("Dicts must have identical key sets.")
+
+    out = {}
+    for k in d1.keys():  # preserves key order from d1
+        v1, v2 = d1[k], d2[k]
+
+        # # torch tensors
+        # if _has_torch and isinstance(v1, torch.Tensor) and isinstance(v2, torch.Tensor):
+        #     out[k] = torch.cat([v1, v2], dim=0)
+        #     continue
+
+        # numpy arrays
+        if isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray):
+            out[k] = np.concatenate([v1, v2], axis=0)
+            continue
+
+        # lists / tuples
+        if isinstance(v1, (list, tuple)) and isinstance(v2, (list, tuple)):
+            if k == 'epochs':
+                out[k] = list(v2)
+            else:
+                seq = list(v1) + list(v2)  # v1-order then v2-order
+                out[k] = type(v1)(seq) if type(v1) is type(v2) else seq
+            continue
+
+        # sets are unordered; if you truly want deterministic order, convert:
+        if isinstance(v1, set) and isinstance(v2, set):
+            out[k] = list(v1) + [x for x in v2 if x not in v1]  # insertion-style, no dups
+            continue
+
+        # fallback: keep both values
+        out[k] = (v1, v2)
+
+    return out
 
 
 

@@ -340,7 +340,7 @@ class mySSD(nn.Module):
                 nms_thresh: float = 0.5,
                 max_per_img: int = 200,
                 class_agnostic: bool = False,
-            ) -> List[Dict[str, object]]:
+                ) -> List[Dict[str, object]]:
         """
         Returns a list of length B; each element is a dict:
         {
@@ -423,75 +423,12 @@ class mySSD(nn.Module):
 
         return out
 
-
-
-    # @staticmethod
-    # def diou_nms(boxes: torch.Tensor,
-    #              scores: torch.Tensor,
-    #              diou_threshold: float,
-    #              eps: float = 1e-9) -> torch.Tensor:
-    #     """
-    #     boxes:  (N,4) xyxy in absolute coords
-    #     scores: (N,)
-    #     returns indices of kept boxes (like torchvision.nms), sorted by score desc
-    #     """
-    #     if boxes.numel() == 0:
-    #         return boxes.new_zeros((0,), dtype=torch.long)
-
-    #     x1, y1, x2, y2 = boxes.unbind(dim=1)
-    #     areas = (x2 - x1).clamp_(min=0) * (y2 - y1).clamp_(min=0)
-
-    #     order = scores.argsort(descending=True)
-    #     keep = []
-
-    #     while order.numel() > 0:
-    #         i = order[0].item()
-    #         keep.append(i)
-    #         if order.numel() == 1:
-    #             break
-
-    #         rest = order[1:]
-
-    #         # Intersection
-    #         xx1 = torch.maximum(x1[i], x1[rest])
-    #         yy1 = torch.maximum(y1[i], y1[rest])
-    #         xx2 = torch.minimum(x2[i], x2[rest])
-    #         yy2 = torch.minimum(y2[i], y2[rest])
-
-    #         iw = (xx2 - xx1).clamp(min=0)
-    #         ih = (yy2 - yy1).clamp(min=0)
-    #         inter = iw * ih
-    #         union = areas[i] + areas[rest] - inter + eps
-    #         iou = inter / union
-
-    #         # Center distance squared
-    #         cx_i = (x1[i] + x2[i]) * 0.5
-    #         cy_i = (y1[i] + y2[i]) * 0.5
-    #         cx_j = (x1[rest] + x2[rest]) * 0.5
-    #         cy_j = (y1[rest] + y2[rest]) * 0.5
-    #         rho2 = (cx_i - cx_j)**2 + (cy_i - cy_j)**2
-
-    #         # Enclosing box diagonal squared
-    #         ex1 = torch.minimum(x1[i], x1[rest])
-    #         ey1 = torch.minimum(y1[i], y1[rest])
-    #         ex2 = torch.maximum(x2[i], x2[rest])
-    #         ey2 = torch.maximum(y2[i], y2[rest])
-    #         cw = (ex2 - ex1).clamp(min=0)
-    #         ch = (ey2 - ey1).clamp(min=0)
-    #         c2 = cw**2 + ch**2 + eps
-
-    #         diou = iou - rho2 / c2
-
-    #         # Keep boxes whose DIoU ≤ threshold (i.e., not “too similar + close”)
-    #         mask = diou <= diou_threshold
-    #         order = rest[mask]
-
-    #     return torch.tensor(keep, device=boxes.device, dtype=torch.long)
     
     @staticmethod
     def iou_nms(boxes: torch.Tensor,
                 scores: torch.Tensor,
-                iou_threshold: float) -> torch.Tensor:
+                iou_threshold: float,
+                ) -> torch.Tensor:
         """
         boxes:  (N,4) xyxy, strictly x1<x2, y1<y2 (as torchvision expects)
         scores: (N,)
@@ -590,7 +527,7 @@ class mySSD(nn.Module):
     @staticmethod
     def decode_ssd(loc: torch.Tensor,
                    priors: torch.Tensor,
-                   variances: Tuple[float, float]=(0.1, 0.2)
+                   variances: Tuple[float, float] = (0.1, 0.2),
                    ) -> torch.Tensor:
         """
         loc:   [num_priors, 4]  (tx, ty, tw, th)
