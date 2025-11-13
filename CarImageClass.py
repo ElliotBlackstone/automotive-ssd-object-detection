@@ -4,22 +4,17 @@ from torchvision import tv_tensors
 from torchvision.io import decode_image
 import pathlib
 from PIL import Image
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, Literal
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.figure import Figure
-from matplotlib.axes import Axes
 from sklearn.model_selection import train_test_split
 
-# Write a custom dataset class (inherits from torch.utils.data.Dataset)
 
-
-# 1. Subclass torch.utils.data.Dataset
 class ImageClass(Dataset):
     
-    # 2. Initialize with a targ_dir and transform (optional) parameter
     def __init__(self,
                  targ_dir: str,
                  file_list: list | None = None,
@@ -29,33 +24,30 @@ class ImageClass(Dataset):
                  device: str = 'cpu',
                  ) -> None:
         
-        # 3. Create class attributes
+        # Create class attributes
         self.device = device
         self.directory = targ_dir
         self.transform = transform
         self.paths, self.annotate_df = get_file_path_plus_dataframe(targ_dir=targ_dir, rand_seed=rand_seed, file_list=file_list, file_pct=file_pct)
-        
-        # Create classes and class_to_idx attributes
         self.classes = list(self.annotate_df['class'].unique())
         if 'empty' in self.classes:
             self.classes.remove('empty')
         self.classes.sort() # alphabetical sort of classes
-
         self.class_to_idx = dict(zip(self.classes, range(0, len(self.classes))))
     
 
-    # 4. Make function to load images
+    # Make function to load images
     def load_image(self, index: int) -> Image.Image:
         "Opens an image via a path and returns it."
         image_path = self.paths[index]
         return Image.open(image_path) 
     
-    # 5. Overwrite the __len__() method (optional but recommended for subclasses of torch.utils.data.Dataset)
+    # Overwrite the __len__() method (optional but recommended for subclasses of torch.utils.data.Dataset)
     def __len__(self) -> int:
         "Returns the total number of samples."
         return len(self.paths)
     
-    # 6. Overwrite the __getitem__() method (required for subclasses of torch.utils.data.Dataset)
+    # Overwrite the __getitem__() method (required for subclasses of torch.utils.data.Dataset)
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, Dict]:
         """
         Returns one sample of data, in the form img, target, where
@@ -65,30 +57,24 @@ class ImageClass(Dataset):
                   "labels":  Tensor[n_i]     # int64, in {0, ..., num_classes-1}
                   "image_id": Tensor[1]      # int64 unique id i.e. index
                   "area":    Tensor[n_i]     # float32 (box area in pixels)
-                  "iscrowd": Tensor[n_i]     # int64 (0 or 1), 0 if you do not use crowd
+                  "iscrowd": Tensor[n_i]     # int64 (0 or 1)
                 }
         where n_i is the number of objects in the ith image.
         """
         img = decode_image(str(self.paths[index]))
-        # img = self.load_image(index).convert("RGB")
-        # image_path = self.paths[index]
         img_name = self.paths[index].stem + '.jpg'
         img_df = self.annotate_df[self.annotate_df['filename'] == img_name]
         img_df.loc[:, 'class'] = img_df['class'].map(dict(self.class_to_idx, empty='empty'))
-        
-        # obj_dict = img_df[['class', 'xmin', 'xmax', 'ymin', 'ymax']].to_dict(orient='records')
-        # class_name  = self.paths[index].parent.name # expects path in data_folder/class_name/image.jpeg
-        # class_idx = self.class_to_idx[class_name]
-
 
         # Wrap into tv_tensors so transforms know how to move boxes with the image
+        # areas, iscrowd is not used so it is omitted to increase speed
         _, H, W = img.shape
 
         if 'empty' not in img_df['class'].unique():
             # initialize boxes, labels, areas
             boxes = torch.zeros(len(img_df), 4)
             labels = torch.zeros(len(img_df), dtype=torch.int64)
-            areas = torch.zeros(len(img_df))
+            # areas = torch.zeros(len(img_df))
             # populate via loop
             for i in range(len(img_df)):
                 j = 0
@@ -130,26 +116,53 @@ class ImageClass(Dataset):
             if self.transform is not None:
                 img, target = self.transform(img, target)
 
-        # Convert back to plain tensors for model consumption
-        # target["boxes"] = torch.as_tensor(target["boxes"], dtype=torch.float32)
-        # img = torch.as_tensor(img, dtype=torch.uint8)  # or later cast to float/normalize
-
-        return img, target # {**{"file_name": img_name}, **{"target": obj_dict}}
+        return img, target
+    
     
 
-    
+
     def show_with_box(self,
                       index: int,
-                      color: str = "C0",
+                      color: str = "r",
                       lw: int = 2,
                       label: bool = False,
-                      pred_box: bool = False,
-                      bbox_pred: torch.Tensor = torch.zeros((1,4))
+                      pred_dict: Dict | None = None,
+                      pred_color: str = "g",
+                      lw_pred: int = 2,
+                      pred_label: bool = False,
+                      pred_ref: Literal["size", "normalized", "current"] = "size",
+                      pred_size: Tuple[int, int] = (300, 300),  # (H_ref, W_ref) used when pred_ref == "size"
                       ) -> Figure:
+        """
+        Plots image (determined by index) with or without bounding boxes + labels.
+        Predicted bounding boxes + labels can be added as well.
+
+        Inputs
+        index: Integer between 0 and the length of the dataset
+        color: String denoting the color of ground truth bounding boxes
+        lw: Integer for line width of ground truth boxes (lw=0 makes boxes disappear)
+        label: Boolean, true will add labels to ground truth bounding boxes
+        pred_dict: None or dictionary containing keys 'labels' and 'boxes'
+        pred_color: String denoting the color of predicted bounding boxes
+        lw_pred: Integer for line width of predicted boxes (lw=0 makes boxes disappear)
+        pred_label: Boolean, true will add labels to predicted bounding boxes
+        pred_ref:
+            - "size": bbox_pred is in pixel coords of a reference frame with size pred_size=(H_ref, W_ref)
+            - "normalized": bbox_pred is in [0,1] relative to the displayed image (H,W)
+            - "current": bbox_pred already matches the displayed image pixel coords
+
+        Output
+        Figure
+        """
+
+        # verify index is valid
+        if (index > len(self)) | (index < 0):
+            raise ValueError(f"Index should be between 0 and {len(self)}, recieved {index}.")
         
-        # convert the image to a numpy array
+        # unpack
         img, target = self[index]
 
+        # ----- convert the image to a numpy array (H,W,C, uint8) -----
         if isinstance(img, Image.Image):
             arr = np.array(img)
         elif isinstance(img, np.ndarray):
@@ -168,26 +181,38 @@ class ImageClass(Dataset):
             arr = (arr * 255.0).clip(0, 255).astype(np.uint8)
         elif arr.dtype != np.uint8:
             arr = arr.astype(np.uint8)
-        
 
-        # plot image
+        # ----- figure / axes -----
         H, W = arr.shape[:2]
         dpi = 100
-        fig, ax = plt.subplots(figsize=(W/dpi, H/dpi), dpi=dpi)
-        ax.imshow(arr)  # origin='upper' -> y downward, matches image coords
+        fig, ax = plt.subplots(figsize=(W / dpi, H / dpi), dpi=dpi)
+        ax.imshow(arr)  # y downward
 
-        for i in range(len(target['labels'])):
+        # ----- helper: to numpy float32 (N,4) -----
+        def _to_np_xyxy(x):
+            if x is None:
+                return None
+            if isinstance(x, torch.Tensor):
+                x = x.detach().cpu().float().numpy()
+            else:
+                x = np.asarray(x, dtype=np.float32)
+            if x.ndim == 1:
+                x = x[None, :]
+            assert x.shape[1] == 4, f"Expected (...,4) boxes; got {x.shape}"
+            return x
 
-            # basic sanity + clipping
-            x_min = max(0, target['boxes'][i, 0])
-            y_min = max(0, target['boxes'][i, 1])
-            x_max = min(W - 1, target['boxes'][i, 2])
-            y_max = min(H - 1, target['boxes'][i, 3])
+        # ----- draw GT boxes (assumed already in image pixel coords) -----
+        gt_boxes = _to_np_xyxy(target["boxes"])
+        gt_labels = target.get("labels", None)
+
+        for i in range(gt_boxes.shape[0]):
+            x_min, y_min, x_max, y_max = gt_boxes[i]
+            # clip
+            x_min, y_min = max(0.0, x_min), max(0.0, y_min)
+            x_max, y_max = min(W - 1.0, x_max), min(H - 1.0, y_max)
             if not (x_max > x_min and y_max > y_min):
-                # raise ValueError("Degenerate or inverted box after clipping.")
                 continue
 
-            
             rect = Rectangle(
                 (x_min, y_min),
                 x_max - x_min,
@@ -197,44 +222,106 @@ class ImageClass(Dataset):
                 facecolor="none",
             )
             ax.add_patch(rect)
-            if label:
-                im_label_masked = target['labels'][i]
-                im_label = list(self.class_to_idx.keys())[list(self.class_to_idx.values()).index(im_label_masked)]
+
+            label_dict = self.class_to_idx
+            if label and gt_labels is not None:
+                # your mapping; convert tensor→int safely
+                lab_val = gt_labels[i].item() if isinstance(gt_labels[i], torch.Tensor) else int(gt_labels[i])
+                # inverse lookup; raise if not found rather than silently wrong
+                try:
+                    im_label = next(k for k, v in label_dict.items() if v == lab_val)
+                except StopIteration:
+                    im_label = str(lab_val)
                 ax.text(
-                    x_min, y_min,
-                    str(im_label),
+                    x_min,
+                    y_min,
+                    im_label,
                     fontsize=10,
                     color="white",
-                    va="top",
-                    ha="left",
+                    va="bottom",
+                    ha="right",
                     bbox=dict(facecolor=color, alpha=0.6, pad=2, edgecolor="none"),
                 )
-        
-        if pred_box == True:
-            for i in range(len(bbox_pred)):
-                x_min = max(0, bbox_pred[i, 0])
-                y_min = max(0, bbox_pred[i, 1])
-                x_max = min(W - 1, bbox_pred[i, 2])
-                y_max = min(H - 1, bbox_pred[i, 3])
+
+        # ----- predicted boxes: rescale to current image if needed -----
+        # if pred_dict is equivalent to (pseudocode) pred_dict is not None and pred_dict is not empty 
+        if pred_dict:
+            bbox_pred = pred_dict['boxes']
+            pb = _to_np_xyxy(bbox_pred)
+
+            if pred_ref == "current":
+                # already in the displayed image pixel space
+                pb_img = pb
+            elif pred_ref == "normalized":
+                # [0,1] relative to (W,H)
+                sx, sy = float(W), float(H)
+                pb_img = pb.copy()
+                pb_img[:, [0, 2]] *= sx
+                pb_img[:, [1, 3]] *= sy
+            elif pred_ref == "size":
+                Href, Wref = pred_size
+                if Href <= 0 or Wref <= 0:
+                    raise ValueError(f"Invalid pred_size={pred_size}. Expect positive (H_ref, W_ref).")
+                sx = float(W) / float(Wref)
+                sy = float(H) / float(Href)
+                pb_img = pb.copy()
+                # scale x by sx, y by sy
+                pb_img[:, [0, 2]] *= sx
+                pb_img[:, [1, 3]] *= sy
+            else:
+                raise ValueError(f"Unsupported pred_ref={pred_ref}")
+
+            # draw predictions (green)
+            for i in range(pb_img.shape[0]):
+                x_min, y_min, x_max, y_max = pb_img[i]
+                x_min, y_min = max(0.0, x_min), max(0.0, y_min)
+                x_max, y_max = min(W - 1.0, x_max), min(H - 1.0, y_max)
                 if not (x_max > x_min and y_max > y_min):
-                    # raise ValueError("Degenerate or inverted box after clipping.")
                     continue
 
-                
                 rect = Rectangle(
                     (x_min, y_min),
                     x_max - x_min,
                     y_max - y_min,
-                    linewidth=lw,
-                    edgecolor='g',
+                    linewidth=lw_pred,
+                    edgecolor=pred_color,
                     facecolor="none",
                 )
                 ax.add_patch(rect)
-        
-        ax.axis("off")
 
+                if pred_label:
+                    mask_pred = pred_dict['labels']  # 0, 1, ..., C-1
+                    # convert from mask to true labels
+                    id2name_dict = {v: k for k, v in label_dict.items()}
+                    label_pred = []
+                    for j in mask_pred:
+                        if j in id2name_dict:
+                            label_pred.append(id2name_dict[j])
+                        else:
+                            # raise ValueError(f"Unknown class id {i}")
+                            label_pred.append("unknown")
+                    if i >= len(label_pred):
+                        # mismatch
+                        raise IndexError(f"label_pred length {len(label_pred)} < number of boxes {pb_img.shape[0]}")
+                    ax.text(
+                        x_max,
+                        y_max,
+                        str(label_pred[i]),
+                        fontsize=10,
+                        color="white",
+                        va="top",
+                        ha="left",
+                        bbox=dict(facecolor=pred_color, alpha=0.6, pad=2, edgecolor="none"),
+                    )
+
+        ax.axis("off")
         plt.close(fig)
         return fig
+
+
+
+
+
 
 
 
@@ -243,6 +330,19 @@ def get_file_path_plus_dataframe(targ_dir: str,
                                  file_list: list | None = None,
                                  file_pct: float = 1,
                                  ) -> Tuple[list, pd.DataFrame]:
+        """
+        Creates a list of file paths and corresponding dataframe.
+
+        Inputs:
+        targ_dir: Target directory containing images and corresponding dataframe
+        rand_seed: (Optional) Random seed that is used when file_pct is not equal to 1
+        file_list: (Optional) Custom list of files within targ_dir
+        file_pct: Percentage of files to use in targ_dir.  Unused if file_list is given.
+
+        Outputs:
+        List of all image file paths
+        Dataframe containing classification and bounding box details for each image
+        """
         
         if file_list is None:
             all_paths = list(pathlib.Path(targ_dir).glob("*.jpg"))
