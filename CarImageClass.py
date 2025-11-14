@@ -290,7 +290,7 @@ class ImageClass(Dataset):
                 ax.add_patch(rect)
 
                 if pred_label:
-                    mask_pred = pred_dict['labels']  # 0, 1, ..., C-1
+                    mask_pred = pred_dict['labels'].tolist()  # 0, 1, ..., C-1
                     # convert from mask to true labels
                     id2name_dict = {v: k for k, v in label_dict.items()}
                     label_pred = []

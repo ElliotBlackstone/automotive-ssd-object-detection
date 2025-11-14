@@ -444,7 +444,7 @@ def SSD_train(model: torch.nn.Module,
                                     best_metric=best_err, outdir=SAVE_DIR, tag=f"epoch_{epoch+past_epochs+1:03d}")
 
             # keep a separate "best" snapshot
-            if (save_best_model == True) & (val_err > best_err):
+            if (save_best_model == True) & (val_err < best_err):
                 best_err = val_err
                 save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
                                 best_metric=best_err, outdir=SAVE_DIR, tag="best")
