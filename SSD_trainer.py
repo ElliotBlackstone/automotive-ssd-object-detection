@@ -29,6 +29,15 @@ from SSD_from_scratch import mySSD
 
 
 
+# TODO: write function for hard negative mining
+# TODO: write function that takes a .jpg image as an input
+#       and returns an image of the same size with bounding
+#       box and labels.
+# TODO: write build_targets docstring
+# TODO: write collate_batch docstring
+# TODO: write CondionalIoUCrop docstring
+
+
 
 def SSD_train_step(model: torch.nn.Module,
                    dataloader: torch.utils.data.DataLoader,
@@ -41,17 +50,18 @@ def SSD_train_step(model: torch.nn.Module,
                    timing: bool = False,
                    ) -> Dict:
     """
-    Inputs:
-    model - a SSD model to be trained
-    dataloader - the data on which the model is to be trained
-    optimizer - 
-    priors_cxcywh - a tensor of priors with shape (8732, 4)
-    iou_thresh - IoU threshold for prior/ground truth overlap, float between 0 and 1.
-    neg_pos_ration - Negative to positive ratio for hard negative mining, float greater than 0.
-    device - 'cpu' or 'cuda'
+    Inputs
+    model: SSD model to be trained
+    dataloader: Data on which the model is to be trained
+    optimizer: Optimizer, e.g. SGD, Adam, etc.
+    priors_cxcywh: Tensor of priors with shape (8732, 4)
+    iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
+    neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
+    device: 'cpu' or 'cuda'
+    timing: Boolean for enabling/disabling timing
 
-    Outputs:
-    Dictonary with localization loss, classification loss, and total loss (sum of loc+cls loss)
+    Outputs
+    Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
     """
 
     # put model in train mode
@@ -125,9 +135,7 @@ def SSD_train_step(model: torch.nn.Module,
 
         # -------- 3) Classification loss with hard-negative mining --------
         # cross-entropy per prior (no reduction)
-        ce = torch.nn.functional.cross_entropy(
-            conf_all.view(-1, C), cls_t.view(-1), reduction='none'
-        ).view(N, P)  # [N,P]
+        ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction='none').view(N, P)  # [N,P]
 
         # keep CE on positives always
         ce_pos = (ce * pos_mask.float()).sum()
@@ -196,7 +204,20 @@ def SSD_test_step(model: torch.nn.Module,
                   device: str = 'cpu',
                   timing: bool = False,
                   ):
-    
+    """
+    Inputs
+    model: SSD model to be tested
+    dataloader: Data on which the model is to be tested
+    priors_cxcywh: Tensor of priors with shape (8732, 4)
+    iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
+    variances: 
+    neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
+    device: 'cpu' or 'cuda'
+    timing: Boolean for enabling/disabling timing
+
+    Outputs
+    Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
+    """
     # put model in eval mode
     model.eval()
 
@@ -230,12 +251,12 @@ def SSD_test_step(model: torch.nn.Module,
 
             # ---------- Build targets (same as train) ----------
             pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=priors_cxcywh,
-                                                  targets=targets,
-                                                  H=images.shape[-2],
-                                                  W=images.shape[-1],
-                                                  iou_thresh=iou_thresh,
-                                                  variances=variances,
-                                                  device=device)
+                                                      targets=targets,
+                                                      H=images.shape[-2],
+                                                      W=images.shape[-1],
+                                                      iou_thresh=iou_thresh,
+                                                      variances=variances,
+                                                      device=device)
         
             # number of positives per image (avoid zero division)
             num_pos_per_img = pos_mask.sum(dim=1)                    # [N]
@@ -323,7 +344,35 @@ def SSD_train(model: torch.nn.Module,
               timing: bool = False,
               past_train_dict: Dict | None = None,
               ) -> Dict:
-    
+    """
+    Inputs
+    model: SSD model to be trained/tested
+    train_dataloader: Data on which the model is to be trained
+    test_dataloader: Data on which the model is to be tested
+    optimizer: Optimizer, e.g. SGD, Adam, etc.
+    priors_cxcywh: Tensor of priors with shape (8732, 4)
+    tr_iou_thresh: Training IoU threshold for prior/ground truth overlap, float between 0 and 1.
+    tr_variances: 
+    tr_neg_pos_ration: Training negative to positive ratio for hard negative mining, float greater than 0.
+    te_iou_thresh: Testing IoU threshold for prior/ground truth overlap, float between 0 and 1.
+    te_variances: 
+    te_neg_pos_ration: Testing negative to positive ratio for hard negative mining, float greater than 0.
+    epochs: Integer number (>0) of train/test cycles
+    early_stopping_rounds: Integer or None. Stop the train/test cycle if the testing score
+                           has not gone down in the past 'early_stopping_rounds' cycles.
+                           None by default (disabled).
+    device: 'cpu' or 'cuda'
+    save_model: Boolean, True to save model
+    save_best_model: Boolean, True to save best model during the train/test cycles
+    epoch_save_interval: Integer or None.  If int, save model every 'epoch_save_interval' cycles.
+    SAVE_DIR: File path to save location
+    timing: Boolean for enabling/disabling timing
+    past_train_dict: Dictionary or None.  If not None, dictionary of past training results.
+
+    Outputs
+    Dictonary with train+test localization loss, train+test classification loss,
+    train+test total loss (sum of loc+cls loss), test mAP, epcohs, train+test timing results
+    """
     # device check
     if (device != 'cpu') & (device != 'cuda'):
         raise ValueError(f"device must be 'cpu' or 'cuda', recieved {device}.")
@@ -497,17 +546,22 @@ def build_targets(priors_cxcywh: torch.Tensor,
 
 
 
-def plot_losses(losses: Dict[str, List[float]], figsize=(12, 8)) -> None:
+def plot_losses(losses: Dict, figsize=(12, 8)) -> None:
     """
-    losses keys (all required): 
+    Plots train/test loss results
+
+    Inputs
+    losses: Dictionary with keys (all required): 
       "train_loss", "train_loss_loc", "train_loss_conf",
       "test_loss",  "test_loss_loc",  "test_loss_conf", "mAP"
-    Values: lists of floats, all the same length.
+    Values: lists of floats (except for mAP), all the same length.
+
+    Output
     Produces a 2x2 matplotlib figure:
-      (1) train_loss vs idx and test_loss vs idx
-      (2) train_loss_conf vs idx and test_loss_conf vs idx
-      (3) train_loss_loc  vs idx and test_loss_loc  vs idx
-      (4) mAP vs idx
+      (1) train_loss vs epoch and test_loss vs epoch
+      (2) train_loss_conf vs epoch and test_loss_conf vs epoch
+      (3) train_loss_loc  vs epoch and test_loss_loc  vs epoch
+      (4) mAP vs epoch
     """
     required = [
         "train_loss", "train_loss_loc", "train_loss_conf",
@@ -592,17 +646,30 @@ def _atomic_save(obj, path: Path):
 
 
 
-def save_checkpoint(
-    epoch: int,
-    model: torch.nn.Module,
-    loss_dict: Dict,
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-    scaler = None,
-    best_metric: float | None = None,
-    outdir: str | Path = "checkpoints",
-    tag: str = "last",               # "last", "best", "epoch_010", etc.
-):
+def save_checkpoint(epoch: int,
+                    model: torch.nn.Module,
+                    loss_dict: Dict,
+                    optimizer: torch.optim.Optimizer,
+                    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+                    scaler = None,
+                    best_metric: float | None = None,
+                    outdir: str | Path = "checkpoints",
+                    tag: str = "last",               # "last", "best", "epoch_010", etc.
+                    ):
+    """
+    Saves essential model information in a .ckpt file.
+
+    Inputs
+    epoch: Integer number of rounds trained
+    model: SSD model
+    loss_dict: Dictionary containing train/test loss information (per epoch)
+    optimizer: Optimizer used to train the model
+    scheduler: Scheduler used to train the model
+    scaler: Scaler used to train the model
+    best_metric: Float denoting the best training metric
+    outdir: Folder location to save model
+    tag: String, name of save file
+    """
     outdir = Path(outdir)
     # Handle DataParallel/Distributed
     model_to_save = model.module if hasattr(model, "module") else model
@@ -627,14 +694,29 @@ def save_checkpoint(
 
 
 
-def load_checkpoint(
-    path: str | Path,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer | None = None,
-    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-    scaler = None,
-    map_location: str = "cpu",
-):
+def load_checkpoint(path: str | Path,
+                    model: torch.nn.Module,
+                    optimizer: torch.optim.Optimizer | None = None,
+                    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+                    scaler = None,
+                    map_location: str = "cpu",
+                    ):
+    """
+    Load model information saved by the 'save_checkpoint' function.
+
+    Inputs
+    path: File path of model to load
+    model: New instance of saved model
+    optimizer: New instance of the same optimizer used to train the model
+    scheduler: New instance of the same scheduler used to train the model
+    scaler: New instance of the same scaler used to train the model
+    map_location: 'cpu' or 'cuda'
+
+    Outputs
+    model/optimizer/scheduler/scaler are all adjusted to be the same as the
+    saved checkpoint.
+    Returns start_epoch (if training is to be resumed), best_metric, loss_dict
+    """
     ckpt = torch.load(path, map_location=map_location, weights_only=False)
 
     # Model (handle DataParallel)
@@ -715,6 +797,21 @@ def collate_detection(batch):
 
 
 def merge_dicts_preserve_order(d1: dict, d2: dict) -> dict:
+    """
+    Merge two dictionaries with identical keys while preserving order.
+
+    Inputs
+    d1: Dictionary
+    d2: Dictionary with same keys as d1
+
+    Output
+    Merged dictionary
+    Example:
+    d1 = {"a": [1, 2], "b": ["python", 8]}
+    d2 = {"a": [3, "alpha"], "b": [2]}
+    merge_dicts_preserve_order(d1, d2) -> {"a": [1, 2, 3, "alpha"], "b": ["python", 8, 2]}
+    merge_dicts_preserve_order(d2, d1) -> {"a": [3, "alpha", 1, 2], "b": [2, "python", 8]}
+    """
     # sanity: same keys and key order from d1 is kept
     if set(d1.keys()) != set(d2.keys()):
         raise KeyError("Dicts must have identical key sets.")
@@ -723,10 +820,10 @@ def merge_dicts_preserve_order(d1: dict, d2: dict) -> dict:
     for k in d1.keys():  # preserves key order from d1
         v1, v2 = d1[k], d2[k]
 
-        # # torch tensors
-        # if _has_torch and isinstance(v1, torch.Tensor) and isinstance(v2, torch.Tensor):
-        #     out[k] = torch.cat([v1, v2], dim=0)
-        #     continue
+        # torch tensors
+        if isinstance(v1, torch.Tensor) and isinstance(v2, torch.Tensor):
+            out[k] = torch.cat([v1, v2], dim=0)
+            continue
 
         # numpy arrays
         if isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray):

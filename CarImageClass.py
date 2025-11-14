@@ -11,16 +11,29 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.figure import Figure
 from sklearn.model_selection import train_test_split
+import warnings
 
 
 class ImageClass(Dataset):
-    
+    """
+    A Dataset class responsible for reading in images with corresponding bounding box and classification labels.
+
+    Inputs
+    targ_dir: Directory location of images and .csv file which
+              contains bounding box and classification information.
+              There should only be on .csv file in targ_dir.
+    file_list: List of file names within targ_dir to work with.  Default None, i.e. use all files.
+    file_pct: Float between 0 and 1 used to randomly select a percentage of total files to work with.
+              Default is 1, i.e. use all files.
+    rand_seed: Random seed for reproducability used when file_pct is less than 1.  Default is 724.
+    device: String for device 'cpu' or 'cuda'.  Should leave as 'cpu' for DataLoaders.  Default 'cpu'.
+    """
     def __init__(self,
                  targ_dir: str,
                  file_list: list | None = None,
                  transform = None,
                  file_pct: float = 1,
-                 rand_seed: int = 724,
+                 rand_seed: int | None = 724,
                  device: str = 'cpu',
                  ) -> None:
         
@@ -86,7 +99,7 @@ class ImageClass(Dataset):
 
                 # areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
 
-            iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
+            # iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
 
             boxes = tv_tensors.BoundingBoxes(boxes, format="XYXY", canvas_size=(H, W))
 
@@ -356,6 +369,9 @@ def get_file_path_plus_dataframe(targ_dir: str,
         num_files = np.floor((len(all_paths) * file_pct)).astype(int)
 
         # there should only be one .csv file in the train/test directory, so list(pathlib.Path(targ_dir).glob("*.csv"))[0] gets it!
+        # warning just in case
+        if len(list(pathlib.Path(targ_dir).glob("*.csv"))) > 1:
+            warnings.warn(f"There are multiple .csv files in {targ_dir}, errors with bounding boxes and class labels likely.")
         df = pd.read_csv(list(pathlib.Path(targ_dir).glob("*.csv"))[0])
 
         if file_pct != 1:
@@ -380,7 +396,7 @@ def get_file_path_plus_dataframe(targ_dir: str,
 
 def make_train_test_split(full_set: ImageClass,
                           test_size: float = 0.25,
-                          rand_state: int = None,
+                          rand_state: int | None = 724,
                           transform_train = None,
                           transform_test = None,
                           device: str = 'cpu',
