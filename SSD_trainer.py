@@ -48,6 +48,7 @@ def SSD_train_step(model: torch.nn.Module,
                    neg_pos_ratio: float = 3.0,
                    device: str = 'cpu',
                    timing: bool = False,
+                   loss: str = 'L1',
                    ) -> Dict:
     """
     Inputs
@@ -59,6 +60,7 @@ def SSD_train_step(model: torch.nn.Module,
     neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
     device: 'cpu' or 'cuda'
     timing: Boolean for enabling/disabling timing
+    loss: String for choosing loss function. 'L1' for smooth L1 loss or 'IoU' for complete box IoU loss.
 
     Outputs
     Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
@@ -129,9 +131,10 @@ def SSD_train_step(model: torch.nn.Module,
 
         # -------- 2) Localization loss (positives only) --------
         # SmoothL1 on offsets (no decode), sum then normalize by #pos
-        loc_loss_sL1 = torch.nn.functional.smooth_l1_loss(
-            loc_all[pos_mask], loc_t_pm, reduction='sum'
-        ) / total_pos
+        if loss == 'L1':
+            batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction='sum') / total_pos
+        else:
+            batch_loc_loss = torchvision.ops.complete_box_iou_loss(loc_all[pos_mask], loc_t_pm, reduction='sum') / total_pos
 
         # -------- 3) Classification loss with hard-negative mining --------
         # cross-entropy per prior (no reduction)
@@ -160,9 +163,9 @@ def SSD_train_step(model: torch.nn.Module,
         conf_loss = (ce_pos + ce_neg_sum) / total_pos
 
         # loss
-        batch_loss = loc_loss_sL1 + conf_loss
+        batch_loss = batch_loc_loss + conf_loss
         
-        loc_loss += loc_loss_sL1.item()
+        loc_loss += batch_loc_loss.item()
         cls_loss += conf_loss.item()
         train_loss += batch_loss.item()
 
@@ -203,6 +206,7 @@ def SSD_test_step(model: torch.nn.Module,
                 # max_detections_per_img=200,
                   device: str = 'cpu',
                   timing: bool = False,
+                  loss: str = 'L1',
                   ):
     """
     Inputs
@@ -214,6 +218,7 @@ def SSD_test_step(model: torch.nn.Module,
     neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
     device: 'cpu' or 'cuda'
     timing: Boolean for enabling/disabling timing
+    loss: String for choosing loss function. 'L1' for smooth L1 loss or 'IoU' for complete box IoU loss.
 
     Outputs
     Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
@@ -264,7 +269,10 @@ def SSD_test_step(model: torch.nn.Module,
 
             # ---------- Losses (no backward) ----------
             # Localization: SmoothL1 on positives only
-            batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
+            if loss == 'L1':
+                batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
+            else:
+                batch_loc_loss = torchvision.ops.complete_box_iou_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
 
             # Classification: cross-entropy with hard-negative mining (same as train)
             ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction="none").view(N, P)
@@ -343,6 +351,7 @@ def SSD_train(model: torch.nn.Module,
               SAVE_DIR: Path | None = None,
               timing: bool = False,
               past_train_dict: Dict | None = None,
+              loss: str = 'L1',
               ) -> Dict:
     """
     Inputs
@@ -368,6 +377,7 @@ def SSD_train(model: torch.nn.Module,
     SAVE_DIR: File path to save location
     timing: Boolean for enabling/disabling timing
     past_train_dict: Dictionary or None.  If not None, dictionary of past training results.
+    loss: String for choosing loss function. 'L1' for smooth L1 loss or 'IoU' for complete box IoU loss.
 
     Outputs
     Dictonary with train+test localization loss, train+test classification loss,
@@ -376,6 +386,10 @@ def SSD_train(model: torch.nn.Module,
     # device check
     if (device != 'cpu') & (device != 'cuda'):
         raise ValueError(f"device must be 'cpu' or 'cuda', recieved {device}.")
+    
+    # loss function check
+    if (loss != 'L1') & (loss != 'IoU'):
+        raise ValueError(f"loss must be 'L1' or 'IoU', recieved {loss}.")
     
     if past_train_dict is not None:
         past_epochs = past_train_dict['epochs'][0]
@@ -403,7 +417,8 @@ def SSD_train(model: torch.nn.Module,
                                     variances=tr_variances,
                                     neg_pos_ratio=tr_neg_pos_ratio,
                                     device=device,
-                                    timing=timing)
+                                    timing=timing,
+                                    loss=loss)
         
         test_dict = SSD_test_step(model=model,
                                   dataloader=test_dataloader,
@@ -412,7 +427,8 @@ def SSD_train(model: torch.nn.Module,
                                   variances=te_variances,
                                   neg_pos_ratio=te_neg_pos_ratio,
                                   device=device,
-                                  timing=timing)
+                                  timing=timing,
+                                  loss=loss)
         
         if scheduler is not None:
             scheduler.step(test_dict['testing loss'])

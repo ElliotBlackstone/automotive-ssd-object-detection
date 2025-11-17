@@ -447,7 +447,7 @@ class mySSD(nn.Module):
                 break
             rest = order[1:]
 
-            # pairwise DIoU between the top-1 box and the remaining boxes
+            # pairwise CIoU between the top-1 box and the remaining boxes
             iou = complete_box_iou(boxes[i].unsqueeze(0), boxes[rest]).squeeze(0)
             # suppress boxes "too similar & close" to the current top box
             order = rest[iou <= iou_threshold]
