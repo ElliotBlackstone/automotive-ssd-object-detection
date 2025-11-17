@@ -17,4 +17,15 @@ The constuction in this project (see [here](/SSD_from_scratch.py)) is not elegan
 ## Dataset
 The [dataset](https://www.kaggle.com/datasets/sshikamaru/udacity-self-driving-car-dataset), originally compiled by Udacity, contains 29,800 images with 194,539 bounding boxes with classification labels.  Two such examples are below.
 
-![asdf](/idx_6932_GT_Box_Label.png)
+![An image with ground truth bounding boxes and classification.](/figures/idx_6932_GT_Box_Label.png)
+![An image with ground truth bounding boxes and classification.](/figures/idx_2265_GT_Box_Label.png)
+
+Unfortunately, there are some flaws with the dataset, as seen below.
+
+![An image with ground truth bounding boxes and classification.](/figures/idx_1568_GT_Box_Label.png)
+![An image with ground truth bounding boxes and classification.](/figures/idx_5979_bad_target_example.png)
+
+In the left image, two of the traffic lights are labels twice and in the right image, a house is labeled as a truck.  These labeling mistakes are present throughout the dataset but occur infrequently.
+
+Originally, there is a total of 11 classes with 7 classes being related to traffic lights (green, red, left turn, etc.).  For simplicity, all of the traffic light classes have been grouped together, which gives us 5 classes (biker, car, pedestrian, traffic light, truck).
+Lastly, there are 3,500 'background' images (i.e. images containing no biker, car, pedestrian, traffic light, truck).
