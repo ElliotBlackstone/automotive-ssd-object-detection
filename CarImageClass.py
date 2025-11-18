@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.figure import Figure
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedGroupKFold
 import warnings
 
 
@@ -402,7 +402,7 @@ def make_train_test_split(full_set: ImageClass,
                           device: str = 'cpu',
                           ) -> Tuple[ImageClass, ImageClass]:
         """
-        Create a train/test split of an image class.
+        Create a group stratified train/test split of an image class.
 
         Inputs:
         full_set - ImageClass file to be train/test splitted
@@ -415,15 +415,29 @@ def make_train_test_split(full_set: ImageClass,
         training ImageClass file of size len(full_set) * (1 - test_size)
         testing ImageClass file of size len(full_set) * test_size
         """
+
+        if (test_size <= 0 ) | (test_size >= 1):
+            raise ValueError(f"Test size should be a number between 0 and 1, recieved {test_size}.")
+        
         # df of original ImageClass file
         df = full_set.annotate_df
 
-        # sklearn train/test split the original dataset, stratify with respect to class
-        train_df, test_df = train_test_split(df, test_size=test_size, random_state=rand_state, stratify=df['class'])
+        # create stratified group train/test split
+        # groups are filenames
+        # stratified via class
+        groups = df['filename']
+        X = df.drop(columns=['class'])
+        y = df['class']
+
+        total_splits = np.floor(1 / test_size).astype(int)
+
+        sgkf = StratifiedGroupKFold(n_splits=total_splits, shuffle=True, random_state=rand_state)
+        # Take the first fold as train/test split
+        tr_idx, te_idx = next(sgkf.split(X, y, groups=groups))
 
         # create training/testing list of file names
-        train_files = train_df['filename'].to_list()
-        test_files = test_df['filename'].to_list()
+        train_files = df['filename'].iloc[tr_idx].to_list()
+        test_files = df['filename'].iloc[te_idx].to_list()
 
         # create training/testing ImageClass files
         train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files, transform=transform_train, device=device)
