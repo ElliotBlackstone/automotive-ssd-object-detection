@@ -25,7 +25,39 @@ Unfortunately, there are some flaws with the dataset, as seen below.
 ![An image with ground truth bounding boxes and classification.](/figures/idx_1568_GT_Box_Label.png)
 ![An image with ground truth bounding boxes and classification.](/figures/idx_5979_bad_target_example.png)
 
-In the left image, two of the traffic lights are labels twice and in the right image, a house is labeled as a truck.  These labeling mistakes are present throughout the dataset but occur infrequently.
+In the first image, two of the traffic lights are labels twice and in the second image, a house is labeled as a truck.  These labeling mistakes are present throughout the dataset but occur infrequently.
+
+
+## Preprocessing
+
+After downloading the [dataset](https://www.kaggle.com/datasets/sshikamaru/udacity-self-driving-car-dataset), follow the steps in the [preprocessing_car.ipynb](/preprocessing_car.ipynb) notebook.
+
 
 Originally, there is a total of 11 classes with 7 classes being related to traffic lights (green, red, left turn, etc.).  For simplicity, all of the traffic light classes have been grouped together, which gives us 5 classes (biker, car, pedestrian, traffic light, truck).
 Lastly, there are 3,500 'background' images (i.e. images containing no biker, car, pedestrian, traffic light, truck).
+
+A train test split is created via a group stratified split.  Groups are images and stratification is with respect to class labels.
+
+
+
+
+## Model training
+
+Due to hardware constraints, only 20% of the training dataset was used to train the model.  
+The model was trained 103 epochs using the SGD optimizer and a ReduceLROnPlateau scheduler.  The number of epochs was a result of early stopping rounds (model training was halted to prevent overfitting).
+
+
+![Training loss data](/figures/loss_vs_epoch.png)
+
+
+
+
+
+
+
+
+
+
+
+
+
