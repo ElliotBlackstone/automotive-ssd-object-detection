@@ -328,7 +328,7 @@ class ImageClass(Dataset):
                     )
 
         ax.axis("off")
-        plt.close(fig)
+       # plt.close(fig)
         return fig
 
 
