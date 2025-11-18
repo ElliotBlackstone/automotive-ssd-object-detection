@@ -48,7 +48,6 @@ def SSD_train_step(model: torch.nn.Module,
                    neg_pos_ratio: float = 3.0,
                    device: str = 'cpu',
                    timing: bool = False,
-                   loss: str = 'L1',
                    ) -> Dict:
     """
     Inputs
@@ -60,7 +59,6 @@ def SSD_train_step(model: torch.nn.Module,
     neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
     device: 'cpu' or 'cuda'
     timing: Boolean for enabling/disabling timing
-    loss: String for choosing loss function. 'L1' for smooth L1 loss or 'IoU' for complete box IoU loss.
 
     Outputs
     Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
@@ -131,10 +129,8 @@ def SSD_train_step(model: torch.nn.Module,
 
         # -------- 2) Localization loss (positives only) --------
         # SmoothL1 on offsets (no decode), sum then normalize by #pos
-        if loss == 'L1':
-            batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction='sum') / total_pos
-        else:
-            batch_loc_loss = torchvision.ops.complete_box_iou_loss(loc_all[pos_mask], loc_t_pm, reduction='sum') / total_pos
+        batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction='sum') / total_pos
+
 
         # -------- 3) Classification loss with hard-negative mining --------
         # cross-entropy per prior (no reduction)
@@ -206,7 +202,6 @@ def SSD_test_step(model: torch.nn.Module,
                 # max_detections_per_img=200,
                   device: str = 'cpu',
                   timing: bool = False,
-                  loss: str = 'L1',
                   ):
     """
     Inputs
@@ -218,7 +213,6 @@ def SSD_test_step(model: torch.nn.Module,
     neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
     device: 'cpu' or 'cuda'
     timing: Boolean for enabling/disabling timing
-    loss: String for choosing loss function. 'L1' for smooth L1 loss or 'IoU' for complete box IoU loss.
 
     Outputs
     Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
@@ -269,10 +263,7 @@ def SSD_test_step(model: torch.nn.Module,
 
             # ---------- Losses (no backward) ----------
             # Localization: SmoothL1 on positives only
-            if loss == 'L1':
-                batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
-            else:
-                batch_loc_loss = torchvision.ops.complete_box_iou_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
+            batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
 
             # Classification: cross-entropy with hard-negative mining (same as train)
             ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction="none").view(N, P)
@@ -351,7 +342,6 @@ def SSD_train(model: torch.nn.Module,
               SAVE_DIR: Path | None = None,
               timing: bool = False,
               past_train_dict: Dict | None = None,
-              loss: str = 'L1',
               ) -> Dict:
     """
     Inputs
@@ -377,7 +367,6 @@ def SSD_train(model: torch.nn.Module,
     SAVE_DIR: File path to save location
     timing: Boolean for enabling/disabling timing
     past_train_dict: Dictionary or None.  If not None, dictionary of past training results.
-    loss: String for choosing loss function. 'L1' for smooth L1 loss or 'IoU' for complete box IoU loss.
 
     Outputs
     Dictonary with train+test localization loss, train+test classification loss,
@@ -386,10 +375,6 @@ def SSD_train(model: torch.nn.Module,
     # device check
     if (device != 'cpu') & (device != 'cuda'):
         raise ValueError(f"device must be 'cpu' or 'cuda', recieved {device}.")
-    
-    # loss function check
-    if (loss != 'L1') & (loss != 'IoU'):
-        raise ValueError(f"loss must be 'L1' or 'IoU', recieved {loss}.")
     
     if past_train_dict is not None:
         past_epochs = past_train_dict['epochs'][0]
@@ -417,8 +402,7 @@ def SSD_train(model: torch.nn.Module,
                                     variances=tr_variances,
                                     neg_pos_ratio=tr_neg_pos_ratio,
                                     device=device,
-                                    timing=timing,
-                                    loss=loss)
+                                    timing=timing)
         
         test_dict = SSD_test_step(model=model,
                                   dataloader=test_dataloader,
@@ -427,8 +411,7 @@ def SSD_train(model: torch.nn.Module,
                                   variances=te_variances,
                                   neg_pos_ratio=te_neg_pos_ratio,
                                   device=device,
-                                  timing=timing,
-                                  loss=loss)
+                                  timing=timing)
         
         if scheduler is not None:
             scheduler.step(test_dict['testing loss'])
@@ -562,7 +545,7 @@ def build_targets(priors_cxcywh: torch.Tensor,
 
 
 
-def plot_losses(losses: Dict, figsize=(12, 8)) -> None:
+def plot_losses(losses: Dict, figsize=(10, 8)) -> None:
     """
     Plots train/test loss results
 
@@ -632,7 +615,7 @@ def plot_losses(losses: Dict, figsize=(12, 8)) -> None:
     # (3) classification loss
     ax = axes[1,0]
     ax.plot(x, losses["train_loss_conf"], label="train")
-    ax.plot(x, losses["test_loss_conf"],  label="test")
+    ax.plot(x, losses["test_loss_conf"],  label="validation")
     ax.set_title("Classification loss")
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
@@ -642,7 +625,7 @@ def plot_losses(losses: Dict, figsize=(12, 8)) -> None:
     # (4) localization loss
     ax = axes[1,1]
     ax.plot(x, losses["train_loss_loc"], label="train")
-    ax.plot(x, losses["test_loss_loc"],  label="test")
+    ax.plot(x, losses["test_loss_loc"],  label="validation")
     ax.set_title("Localization loss")
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
