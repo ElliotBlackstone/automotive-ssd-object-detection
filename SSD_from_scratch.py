@@ -465,6 +465,13 @@ class mySSD(nn.Module):
                    background_class: int = 0
                    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
+        Inputs
+        gt_boxes_cxcywh: Ground truth bounding boxes tensor in 'cxcywh' format
+        gt_labels: Tensor containing labels corresponding to the ground truth boxes
+        priors_cxcywh: Tensor of shape [8732, 4] containing all priors
+        variances:
+        background_class: integer denoting background class
+
         Returns:
         loc_target: [P,4] (tx,ty,tw,th) per prior (positives encoded, negatives filled too)
         cls_target: [P]   background for negatives, matched GT label for positives
