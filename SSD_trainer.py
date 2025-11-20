@@ -592,7 +592,7 @@ def plot_losses(losses: Dict, figsize=(10, 8)) -> None:
     # (1) total loss
     ax = axes[0,0]
     ax.plot(x, losses["train_loss"], label="train")
-    ax.plot(x, losses["test_loss"],  label="test")
+    ax.plot(x, losses["test_loss"],  label="validation")
     ax.set_title("Total loss")
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
