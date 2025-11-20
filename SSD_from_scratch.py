@@ -335,22 +335,48 @@ class mySSD(nn.Module):
 
     @torch.no_grad()
     def predict(self,
-                x: torch.Tensor,
+                images: torch.Tensor,
                 score_thresh: float = 0.05,
                 nms_thresh: float = 0.5,
                 max_per_img: int = 200,
                 class_agnostic: bool = False,
+                pre_loc_all: torch.Tensor | None = None,
+                pre_conf_all: torch.Tensor | None = None,
                 ) -> List[Dict[str, object]]:
         """
-        Returns a list of length B; each element is a dict:
+        Inputs
+        images: Tensor of size [B, 3, 300, 300]
+        score_thresh: Float between 0 and 1 determining the score threshold for kept predictions
+        nms_thresh: Float between 0 and 1 determining the non-maximum suppression threshold
+        max_per_img: Integer denoting the max amount of predictions per image
+        class_agnostic: Boolean
+        pre_loc_all: Tensor of size [B, P, 4], pre computation of loc_all, _ = self(images)
+        pre_conf_all: Tensor of size [B, P, C], pre computation of _, conf_all = self(images)
+
+        Output
+        List of length B; each element is a dict:
         {
-            'labels': Tensor, contains values 0, ..., C-1
-            'scores': Tensor, contains confidences
-            'boxes' : Tensor[K,4] (xyxy)
+            'labels': Tensor, contains values 0, ..., C-2
+            'scores': Tensor, contains confidences for each class
+            'boxes' : Tensor of size [K,4] in 'xyxy' format
         }
+        (B - batch size, P - number of priors (8732), C - number of classes)
         """
+
+        # make sure score, nms threshold are valid
+        if (score_thresh >= 1) | (score_thresh <= 0):
+            raise ValueError(f"Score threshold should be greater than 0 and less than 1, recieved {score_thresh}.")
+        
+        if (nms_thresh >= 1) | (nms_thresh <= 0):
+            raise ValueError(f"NMS threshold should be greater than 0 and less than 1, recieved {nms_thresh}.")
+        
         self.eval()
-        loc_all, conf_all = self(x)                      # (B,P,4), (B,P,C)
+        if (pre_loc_all is not None) & (pre_conf_all is not None):
+            loc_all = pre_loc_all
+            conf_all = pre_conf_all
+        else:
+            loc_all, conf_all = self(images)                      # (B,P,4), (B,P,C)
+        
         B, P, C = conf_all.shape
         device = conf_all.device
         assert P == self.priors.size(0)
@@ -466,18 +492,25 @@ class mySSD(nn.Module):
                    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Inputs
-        gt_boxes_cxcywh: Ground truth bounding boxes tensor in 'cxcywh' format
-        gt_labels: Tensor containing labels corresponding to the ground truth boxes
-        priors_cxcywh: Tensor of shape [8732, 4] containing all priors
+        gt_boxes_cxcywh: Ground truth (GT) bounding boxes tensor in 'cxcywh' format
+        gt_labels: Tensor containing labels (0, 1, ..., C-2, where C is the total
+                   number of classes, including background) corresponding to GT boxes
+        priors_cxcywh: Tensor of shape [P, 4] containing all priors in 'cxcywh' format
         variances:
-        background_class: integer denoting background class
+        background_class: integer denoting background class, must be 0
 
         Returns:
         loc_target: [P,4] (tx,ty,tw,th) per prior (positives encoded, negatives filled too)
         cls_target: [P]   background for negatives, matched GT label for positives
         pos_mask:   [P]   boolean positives
         matched_gt_xyxy: [P,4] GT boxes matched to each prior (xyxy, normalized)
+        (P is the number of priors, 8732)
         """
+
+        # only works if background_class = 0
+        if background_class != 0:
+            raise ValueError(f"Background should be 0, recieved {background_class}.")
+        
         device = priors_cxcywh.device
         dtype  = priors_cxcywh.dtype
         priors_cxcywh = priors_cxcywh.to(device=device, dtype=dtype)
@@ -526,7 +559,7 @@ class mySSD(nn.Module):
         gt_labels = gt_labels.to(device=device)
         matched_labels = gt_labels[best_gt_per_prior]        # [P]
         cls_target = torch.full((P,), background_class, dtype=matched_labels.dtype, device=device)
-        cls_target[pos_mask] = matched_labels[pos_mask] + 1
+        cls_target[pos_mask] = matched_labels[pos_mask] + 1  # shift by 1 because 0 is reserved for 'background'
 
         return loc_target, cls_target, pos_mask, matched_gt_cxcywh
 
@@ -537,9 +570,14 @@ class mySSD(nn.Module):
                    variances: Tuple[float, float] = (0.1, 0.2),
                    ) -> torch.Tensor:
         """
-        loc:   [num_priors, 4]  (tx, ty, tw, th)
-        priors:[num_priors, 4]  (cx_a, cy_a, w_a, h_a), normalized [0,1]
-        returns boxes_cxcywh normalized to [0,1], shape [num_priors, 4]
+        Inputs
+        loc: Tensor of shape [P, 4] containing (tx, ty, tw, th)
+        priors: Priors of shape [P, 4] containing (cx_a, cy_a, w_a, h_a), normalized [0,1]
+        variances: Tuple containing two positive floats, default (0.1, 0.2)
+
+        Outputs
+        boxes_cxcywh normalized to [0,1], shape [P, 4]
+        (P is the number of priors, 8732)
         """
         v_c, v_s = variances
         # centers

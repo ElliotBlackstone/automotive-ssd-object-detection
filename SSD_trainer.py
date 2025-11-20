@@ -33,13 +33,12 @@ from SSD_from_scratch import mySSD
 # TODO: write function that takes a .jpg image as an input
 #       and returns an image of the same size with bounding
 #       box and labels.
-# TODO: write build_targets docstring
 # TODO: write collate_batch docstring
 # TODO: write CondionalIoUCrop docstring
 
 
 
-def SSD_train_step(model: torch.nn.Module,
+def SSD_train_step(model: mySSD,
                    dataloader: torch.utils.data.DataLoader,
                    optimizer: torch.optim.Optimizer,
                    priors_cxcywh: torch.Tensor,
@@ -54,7 +53,7 @@ def SSD_train_step(model: torch.nn.Module,
     model: SSD model to be trained
     dataloader: Data on which the model is to be trained
     optimizer: Optimizer, e.g. SGD, Adam, etc.
-    priors_cxcywh: Tensor of priors with shape (8732, 4)
+    priors_cxcywh: Tensor of priors with shape [P, 4]
     iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
     neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
     device: 'cpu' or 'cuda'
@@ -62,6 +61,7 @@ def SSD_train_step(model: torch.nn.Module,
 
     Outputs
     Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
+    (P - number of priors (8732))
     """
 
     # put model in train mode
@@ -191,7 +191,7 @@ def SSD_train_step(model: torch.nn.Module,
 
 
 
-def SSD_test_step(model: torch.nn.Module,
+def SSD_test_step(model: mySSD,
                   dataloader: torch.utils.data.DataLoader,
                   priors_cxcywh: torch.Tensor,
                   iou_thresh: float = 0.5,
@@ -205,9 +205,9 @@ def SSD_test_step(model: torch.nn.Module,
                   ):
     """
     Inputs
-    model: SSD model to be tested
+    model: mySSD class model to be tested
     dataloader: Data on which the model is to be tested
-    priors_cxcywh: Tensor of priors with shape (8732, 4)
+    priors_cxcywh: Tensor of priors with shape [P, 4]
     iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
     variances: 
     neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
@@ -216,6 +216,7 @@ def SSD_test_step(model: torch.nn.Module,
 
     Outputs
     Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
+    (P - number of priors (8732))
     """
     # put model in eval mode
     model.eval()
@@ -246,7 +247,6 @@ def SSD_test_step(model: torch.nn.Module,
             loc_all, conf_all = model(images)
             N, P, C = conf_all.shape          # N - batch size, P - number of priors (8732), C - number of classes
             H, W = images.shape[-2], images.shape[-1]
-            norm = torch.tensor([W, H, W, H], device=device, dtype=torch.float32)
 
             # ---------- Build targets (same as train) ----------
             pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=priors_cxcywh,
@@ -288,7 +288,13 @@ def SSD_test_step(model: torch.nn.Module,
             if timing:
                 t0_pred = time.perf_counter()
 
-            preds = model.predict(images, score_thresh=0.2, max_per_img=100)
+            preds = model.predict(images=images,
+                                  score_thresh=0.2,
+                                  nms_thresh=0.5,
+                                  max_per_img=100,
+                                  class_agnostic=False,
+                                  pre_loc_all=loc_all,
+                                  pre_conf_all=conf_all)
 
             if timing:
                 t1_pred = time.perf_counter()
@@ -345,11 +351,11 @@ def SSD_train(model: torch.nn.Module,
               ) -> Dict:
     """
     Inputs
-    model: SSD model to be trained/tested
+    model: mySSD model to be trained/tested
     train_dataloader: Data on which the model is to be trained
     test_dataloader: Data on which the model is to be tested
     optimizer: Optimizer, e.g. SGD, Adam, etc.
-    priors_cxcywh: Tensor of priors with shape (8732, 4)
+    priors_cxcywh: Tensor of priors with shape [P, 4]
     tr_iou_thresh: Training IoU threshold for prior/ground truth overlap, float between 0 and 1.
     tr_variances: 
     tr_neg_pos_ration: Training negative to positive ratio for hard negative mining, float greater than 0.
@@ -371,6 +377,7 @@ def SSD_train(model: torch.nn.Module,
     Outputs
     Dictonary with train+test localization loss, train+test classification loss,
     train+test total loss (sum of loc+cls loss), test mAP, epcohs, train+test timing results
+    (P - number of priors (8732))
     """
     # device check
     if (device != 'cpu') & (device != 'cuda'):
@@ -511,6 +518,28 @@ def build_targets(priors_cxcywh: torch.Tensor,
                   variances: Tuple[float, float] = (0.1, 0.2),
                   device: str = 'cpu',
                   ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Inputs
+    priors_cxcywh: Tensor of size [P, 4] in 'cxcywh' format, priors
+    targets: List of length B, where each element is a dictionary containing keys 'boxes', 'labels'
+    H: Integer, should be 300
+    W: Integer, should be 300
+    iou_thresh: Float between 0 and 1 denoting the IoU threshold
+    variances: Tuple containing two positive floats
+    device: String, should be 'cpu' or 'cuda'
+
+    Output
+    Tuple containing
+    1) Boolean tensor of size [B, P] denoting priors boxes that
+       have sufficient (determined by iou_thresh) overlap with GT boxes
+    2) Tensor containing offsets (tx, ty, tw, th) corresponding to matched GT boxes
+    3) Tensor of size [B, P] where entries (per batch) are labels 0, ..., C-1,
+       with 0 corresponding to 'background'
+    (B - batch size, P - number of priors (8732), C - number of classes (including background))
+    """
+    # protect IoU threshold
+    if (iou_thresh >= 1) | (iou_thresh <= 0):
+            raise ValueError(f"Score threshold should be greater than 0 and less than 1, recieved {iou_thresh}.")
     
     norm = torch.tensor([W, H, W, H], device=device, dtype=torch.float32)
 
@@ -537,9 +566,9 @@ def build_targets(priors_cxcywh: torch.Tensor,
         cls_t_list.append(cls_t)
         pos_mask_lst.append(pos_mask)
 
-    loc_t   = torch.stack(loc_t_list, dim=0).to(device)      # [N,P,4]   N = len(targets) aka batch size
-    cls_t   = torch.stack(cls_t_list, dim=0).to(device)      # [N,P]
-    pos_mask = torch.stack(pos_mask_lst, dim=0).to(device)   # [N,P] bool
+    loc_t   = torch.stack(loc_t_list, dim=0).to(device)      # [B,P,4]   B = len(targets) aka batch size
+    cls_t   = torch.stack(cls_t_list, dim=0).to(device)      # [B,P]
+    pos_mask = torch.stack(pos_mask_lst, dim=0).to(device)   # [B,P] bool
 
     return pos_mask, loc_t[pos_mask], cls_t
 
