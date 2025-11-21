@@ -29,7 +29,6 @@ from SSD_from_scratch import mySSD
 
 
 
-# TODO: write function for hard negative mining
 # TODO: write function that takes a .jpg image as an input
 #       and returns an image of the same size with bounding
 #       box and labels.
@@ -55,7 +54,7 @@ def SSD_train_step(model: mySSD,
     optimizer: Optimizer, e.g. SGD, Adam, etc.
     priors_cxcywh: Tensor of priors with shape [P, 4]
     iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
-    neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
+    neg_pos_ratio: Negative to positive ratio for hard negative mining, float greater than 0.
     device: 'cpu' or 'cuda'
     timing: Boolean for enabling/disabling timing
 
@@ -70,7 +69,7 @@ def SSD_train_step(model: mySSD,
     # initialize loss
     train_loss = 0
     loc_loss = 0
-    cls_loss = 0
+    conf_loss = 0
 
     # timing
     batch_count = 0
@@ -105,7 +104,7 @@ def SSD_train_step(model: mySSD,
             t1_forward = time.perf_counter()
             time_forward += t1_forward - t0_forward
         
-        N, P, C = conf_all.shape          # N - batch size, P - number of priors (8732), C - number of classes
+        B, P, C = conf_all.shape          # B - batch size, P - number of priors (8732), C - number of classes
 
         # -------- 1) Build per-image targets via encode() --------
         if timing:
@@ -124,7 +123,7 @@ def SSD_train_step(model: mySSD,
             time_build_tar += t1_build_tar - t0_build_tar
         
         # number of positives per image (avoid zero division)
-        num_pos_per_img = pos_mask.sum(dim=1)                    # [N]
+        num_pos_per_img = pos_mask.sum(dim=1)                    # [B]
         total_pos = num_pos_per_img.sum().clamp_min(1).float()   # scalar
 
         # -------- 2) Localization loss (positives only) --------
@@ -133,36 +132,43 @@ def SSD_train_step(model: mySSD,
 
 
         # -------- 3) Classification loss with hard-negative mining --------
+        batch_conf_loss = CELoss_w_neg_mining(conf_all=conf_all,
+                                        cls_t=cls_t,
+                                        pos_mask=pos_mask,
+                                        num_pos_per_img=num_pos_per_img,
+                                        total_pos=total_pos,
+                                        neg_pos_ratio=neg_pos_ratio,
+                                        device=device)
         # cross-entropy per prior (no reduction)
-        ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction='none').view(N, P)  # [N,P]
+        # ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction='none').view(B, P)  # [B, P]
 
-        # keep CE on positives always
-        ce_pos = (ce * pos_mask.float()).sum()
+        # # keep CE on positives always
+        # ce_pos = (ce * pos_mask.float()).sum()
 
-        # select hardest negatives per image at ratio R:1 w.r.t positives
-        ce_neg_sum = torch.tensor(0.0, device=device)
-        for i in range(N):
-            n_pos = int(num_pos_per_img[i].item())
-            if n_pos == 0:
-                # still allow some negatives to contribute (common trick: pretend 1 positive)
-                max_negs = int(neg_pos_ratio)
-            else:
-                max_negs = int(neg_pos_ratio * n_pos)
+        # # select hardest negatives per image at ratio R:1 w.r.t positives
+        # ce_neg_sum = torch.tensor(0.0, device=device)
+        # for i in range(B):
+        #     n_pos = int(num_pos_per_img[i].item())
+        #     if n_pos == 0:
+        #         # still allow some negatives to contribute (common trick: pretend 1 positive)
+        #         max_negs = int(neg_pos_ratio)
+        #     else:
+        #         max_negs = int(neg_pos_ratio * n_pos)
 
-            ce_neg_i = ce[i].masked_select(~pos_mask[i])         # [#neg_i]
-            if ce_neg_i.numel() == 0 or max_negs == 0:
-                continue
-            k = min(max_negs, ce_neg_i.numel())
-            topk_vals, _ = torch.topk(ce_neg_i, k, largest=True, sorted=False)
-            ce_neg_sum += topk_vals.sum()
+        #     ce_neg_i = ce[i].masked_select(~pos_mask[i])         # [#neg_i]
+        #     if ce_neg_i.numel() == 0 or max_negs == 0:
+        #         continue
+        #     k = min(max_negs, ce_neg_i.numel())
+        #     topk_vals, _ = torch.topk(ce_neg_i, k, largest=True, sorted=False)
+        #     ce_neg_sum += topk_vals.sum()
 
-        conf_loss = (ce_pos + ce_neg_sum) / total_pos
+        # conf_loss = (ce_pos + ce_neg_sum) / total_pos
 
         # loss
-        batch_loss = batch_loc_loss + conf_loss
+        batch_loss = batch_loc_loss + batch_conf_loss
         
         loc_loss += batch_loc_loss.item()
-        cls_loss += conf_loss.item()
+        conf_loss += batch_conf_loss.item()
         train_loss += batch_loss.item()
 
         # Optimizer zero grad
@@ -179,14 +185,14 @@ def SSD_train_step(model: mySSD,
 
     train_loss = train_loss / len(dataloader)
     loc_loss = loc_loss / len(dataloader)
-    cls_loss = cls_loss / len(dataloader)
+    conf_loss = conf_loss / len(dataloader)
 
     time_dict = {"to device": time_device/batch_count,
                  "model forward": time_forward/batch_count,
                  "build targets": time_build_tar/batch_count,}
     
 
-    return {"training loss": train_loss, "localization loss": loc_loss, "classification loss": cls_loss, "timing": time_dict}
+    return {"training loss": train_loss, "localization loss": loc_loss, "classification loss": conf_loss, "timing": time_dict}
 
 
 
@@ -266,19 +272,28 @@ def SSD_test_step(model: mySSD,
             batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
 
             # Classification: cross-entropy with hard-negative mining (same as train)
-            ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction="none").view(N, P)
-            ce_pos = (ce * pos_mask.float()).sum()
+            batch_conf_loss = CELoss_w_neg_mining(conf_all=conf_all,
+                                        cls_t=cls_t,
+                                        pos_mask=pos_mask,
+                                        num_pos_per_img=num_pos_per_img,
+                                        total_pos=total_pos,
+                                        neg_pos_ratio=neg_pos_ratio,
+                                        device=device)
+            
+            # ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction="none").view(N, P)
+            # ce_pos = (ce * pos_mask.float()).sum()
 
-            ce_neg_sum = torch.tensor(0.0, device=device)
-            for i in range(N):
-                n_pos = int(num_pos_per_img[i].item())
-                max_negs = int(neg_pos_ratio * n_pos) if n_pos > 0 else int(neg_pos_ratio)
-                ce_neg_i = ce[i].masked_select(~pos_mask[i])   # [#neg_i]
-                if ce_neg_i.numel() > 0 and max_negs > 0:
-                    k = min(max_negs, ce_neg_i.numel())
-                    ce_neg_sum += ce_neg_i.topk(k, largest=True).values.sum()
+            # ce_neg_sum = torch.tensor(0.0, device=device)
+            # for i in range(N):
+            #     n_pos = int(num_pos_per_img[i].item())
+            #     max_negs = int(neg_pos_ratio * n_pos) if n_pos > 0 else int(neg_pos_ratio)
+            #     ce_neg_i = ce[i].masked_select(~pos_mask[i])   # [#neg_i]
+            #     if ce_neg_i.numel() > 0 and max_negs > 0:
+            #         k = min(max_negs, ce_neg_i.numel())
+            #         ce_neg_sum += ce_neg_i.topk(k, largest=True).values.sum()
 
-            batch_conf_loss = (ce_pos + ce_neg_sum) / total_pos
+            # batch_conf_loss = (ce_pos + ce_neg_sum) / total_pos
+            
             batch_total_loss = batch_loc_loss + batch_conf_loss
 
             loc_loss += batch_loc_loss.item()
@@ -333,12 +348,9 @@ def SSD_train(model: torch.nn.Module,
               optimizer: torch.optim.Optimizer,
               priors_cxcywh: torch.Tensor,
               scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-              tr_iou_thresh: float = 0.5,
-              tr_variances: Tuple[float, float] = (0.1, 0.2),
-              tr_neg_pos_ratio: float = 3.0,
-              te_iou_thresh: float = 0.5,
-              te_variances: Tuple[float, float] = (0.1, 0.2),
-              te_neg_pos_ratio: float = 3.0,
+              iou_thresh: float = 0.5,
+              variances: Tuple[float, float] = (0.1, 0.2),
+              neg_pos_ratio: float = 3.0,
               epochs: int = 5,
               early_stopping_rounds: int | None = None,
               device: str = 'cpu',
@@ -356,12 +368,9 @@ def SSD_train(model: torch.nn.Module,
     test_dataloader: Data on which the model is to be tested
     optimizer: Optimizer, e.g. SGD, Adam, etc.
     priors_cxcywh: Tensor of priors with shape [P, 4]
-    tr_iou_thresh: Training IoU threshold for prior/ground truth overlap, float between 0 and 1.
-    tr_variances: 
-    tr_neg_pos_ration: Training negative to positive ratio for hard negative mining, float greater than 0.
-    te_iou_thresh: Testing IoU threshold for prior/ground truth overlap, float between 0 and 1.
-    te_variances: 
-    te_neg_pos_ration: Testing negative to positive ratio for hard negative mining, float greater than 0.
+    iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
+    variances: 
+    neg_pos_ratio: Negative to positive ratio for hard negative mining, float greater than 0.
     epochs: Integer number (>0) of train/test cycles
     early_stopping_rounds: Integer or None. Stop the train/test cycle if the testing score
                            has not gone down in the past 'early_stopping_rounds' cycles.
@@ -405,18 +414,18 @@ def SSD_train(model: torch.nn.Module,
                                     dataloader=train_dataloader,
                                     optimizer=optimizer,
                                     priors_cxcywh=priors_cxcywh,
-                                    iou_thresh=tr_iou_thresh,
-                                    variances=tr_variances,
-                                    neg_pos_ratio=tr_neg_pos_ratio,
+                                    iou_thresh=iou_thresh,
+                                    variances=variances,
+                                    neg_pos_ratio=neg_pos_ratio,
                                     device=device,
                                     timing=timing)
         
         test_dict = SSD_test_step(model=model,
                                   dataloader=test_dataloader,
                                   priors_cxcywh=priors_cxcywh,
-                                  iou_thresh=te_iou_thresh,
-                                  variances=te_variances,
-                                  neg_pos_ratio=te_neg_pos_ratio,
+                                  iou_thresh=iou_thresh,
+                                  variances=variances,
+                                  neg_pos_ratio=neg_pos_ratio,
                                   device=device,
                                   timing=timing)
         
@@ -571,6 +580,59 @@ def build_targets(priors_cxcywh: torch.Tensor,
     pos_mask = torch.stack(pos_mask_lst, dim=0).to(device)   # [B,P] bool
 
     return pos_mask, loc_t[pos_mask], cls_t
+
+
+
+def CELoss_w_neg_mining(conf_all: torch.Tensor,
+                        cls_t: torch.Tensor,
+                        pos_mask: torch.Tensor,
+                        num_pos_per_img: torch.Tensor,
+                        total_pos: int,
+                        neg_pos_ratio: float = 3.0,
+                        device: str = 'cpu',) -> torch.Tensor:
+    """
+    Inputs
+    conf_all: Tensor of size [B, P, C] containing class logits for each prior
+    cls_t: Tensor of size [B, P] where entries (per batch) are labels 0, ..., C-1,
+           with 0 corresponding to 'background'
+    pos_mask: Boolean tensor of size [B, P] denoting priors boxes that have
+              sufficient overlap with GT boxes
+    num_pos_per_img: Tensor of size [B] denoting number of positive priors per image, min 1
+    total_pos: Integer, sum of num_pos_per_img
+    neg_pos_ratio: Float, positive number giving the ratio of negative to positive priors
+    device: String, 'cpu' or 'cuda'
+
+    Output
+    Float; cross entropy loss with hard negative mining
+    (B - batch size, P - number of priors (8732), C - number of classes (including background))
+    """
+    # cross-entropy per prior (no reduction)
+    B, P, C = conf_all.shape     # B - batch size, P - number of priors (8732), C - number of classes
+    ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction='none').view(B, P)  # [B, P]
+
+    # keep CE on positives always
+    # pos_mask.float() turns true/false into 1/0
+    ce_pos = (ce * pos_mask.float()).sum()
+
+    # select hardest negatives per image at ratio R:1 w.r.t positives
+    ce_neg_sum = torch.tensor(0.0, device=device)
+    for i in range(B):
+        n_pos = int(num_pos_per_img[i].item())
+        if n_pos == 0:
+            # still allow some negatives to contribute (common trick: pretend 1 positive)
+            max_negs = int(neg_pos_ratio)
+        else:
+            max_negs = int(neg_pos_ratio * n_pos)
+
+        ce_neg_i = ce[i].masked_select(~pos_mask[i])         # [#neg_i]
+        if ce_neg_i.numel() == 0 or max_negs == 0:
+            continue  # continue means stop here and proceed to the next iteration
+
+        k = min(max_negs, ce_neg_i.numel())
+        topk_vals, _ = torch.topk(ce_neg_i, k, largest=True, sorted=False)
+        ce_neg_sum += topk_vals.sum()
+
+    return (ce_pos + ce_neg_sum) / total_pos
 
 
 
