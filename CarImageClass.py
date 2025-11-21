@@ -34,6 +34,7 @@ class ImageClass(Dataset):
                  transform = None,
                  file_pct: float = 1,
                  rand_seed: int | None = 724,
+                 include_area: bool = False,
                  device: str = 'cpu',
                  ) -> None:
         
@@ -47,6 +48,7 @@ class ImageClass(Dataset):
             self.classes.remove('empty')
         self.classes.sort() # alphabetical sort of classes
         self.class_to_idx = dict(zip(self.classes, range(0, len(self.classes))))
+        self.area = include_area
     
 
     # Make function to load images
@@ -87,7 +89,8 @@ class ImageClass(Dataset):
             # initialize boxes, labels, areas
             boxes = torch.zeros(len(img_df), 4)
             labels = torch.zeros(len(img_df), dtype=torch.int64)
-            # areas = torch.zeros(len(img_df))
+            if self.area:
+                areas = torch.zeros(len(img_df))
             # populate via loop
             for i in range(len(img_df)):
                 j = 0
@@ -97,7 +100,8 @@ class ImageClass(Dataset):
                     boxes[i, j] = img_df.iloc[i][coord]
                     j = j + 1
 
-                # areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
+                if self.area:
+                    areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
 
             # iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
 
@@ -111,10 +115,14 @@ class ImageClass(Dataset):
                     #'iscrowd': iscrowd.to(device=self.device, dtype=torch.int64),
                     }
             
+            if self.area:
+                target['areas'] = areas.to(device=self.device, dtype=torch.float32)
+            
             if self.transform is not None:
                 img, target = self.transform(img, target)
 
-            # target['areas'] = (target['boxes'][:,2] - target['boxes'][:,0]).clamp(0, W) * (target['boxes'][:,3] - target['boxes'][:,1]).clamp(0, H)
+            if self.area:
+                target['areas'] = (target['boxes'][:,2] - target['boxes'][:,0]).clamp(0, W) * (target['boxes'][:,3] - target['boxes'][:,1]).clamp(0, H)
 
         # if the image is background
         else:
@@ -125,6 +133,8 @@ class ImageClass(Dataset):
                   #'areas': torch.zeros((0,), dtype=torch.float32, device=self.device),
                   #'iscrowd': torch.zeros((0,), dtype=torch.int64, device=self.device),
                   }
+            if self.area:
+                target['areas'] = torch.zeros((0,), dtype=torch.float32, device=self.device)
             
             if self.transform is not None:
                 img, target = self.transform(img, target)
