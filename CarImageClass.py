@@ -409,6 +409,7 @@ def make_train_test_split(full_set: ImageClass,
                           rand_state: int | None = 724,
                           transform_train = None,
                           transform_test = None,
+                          include_area: bool = False,
                           device: str = 'cpu',
                           ) -> Tuple[ImageClass, ImageClass]:
         """
@@ -446,11 +447,11 @@ def make_train_test_split(full_set: ImageClass,
         tr_idx, te_idx = next(sgkf.split(X, y, groups=groups))
 
         # create training/testing list of file names
-        train_files = df['filename'].iloc[tr_idx].to_list()
-        test_files = df['filename'].iloc[te_idx].to_list()
+        train_files = df['filename'].iloc[tr_idx].drop_duplicates().to_list()
+        test_files = df['filename'].iloc[te_idx].drop_duplicates().to_list()
 
         # create training/testing ImageClass files
-        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files, transform=transform_train, device=device)
-        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files, transform=transform_test, device=device)
+        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files, transform=transform_train, include_area=include_area, device=device)
+        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files, transform=transform_test, include_area=include_area, device=device)
 
         return train_IC, test_IC

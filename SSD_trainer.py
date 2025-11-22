@@ -1070,8 +1070,8 @@ class ConditionalIoUCrop(torch.nn.Module):
         max_scale: float = 1.0,
         min_aspect_ratio: float = 0.75,
         max_aspect_ratio: float = 1.33,
-        small_sampler_options = (0.0, 0.05, 0.1, None),
-        large_sampler_options = (0.05, 0.1, 0.3, None),
+        small_sampler_options = (0.0, 0.05, 0.1, 2.0),
+        large_sampler_options = (0.05, 0.1, 0.3, 2.0),
         trials: int = 10,
     ):
         super().__init__()
