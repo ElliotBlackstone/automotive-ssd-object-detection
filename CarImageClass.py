@@ -26,7 +26,6 @@ class ImageClass(Dataset):
     file_pct: Float between 0 and 1 used to randomly select a percentage of total files to work with.
               Default is 1, i.e. use all files.
     rand_seed: Random seed for reproducability used when file_pct is less than 1.  Default is 724.
-    device: String for device 'cpu' or 'cuda'.  Should leave as 'cpu' for DataLoaders.  Default 'cpu'.
     """
     def __init__(self,
                  targ_dir: str,
@@ -35,11 +34,9 @@ class ImageClass(Dataset):
                  file_pct: float = 1,
                  rand_seed: int | None = 724,
                  include_area: bool = False,
-                 device: str = 'cpu',
                  ) -> None:
         
         # Create class attributes
-        self.device = device
         self.directory = targ_dir
         self.transform = transform
         self.paths, self.annotate_df = get_file_path_plus_dataframe(targ_dir=targ_dir, rand_seed=rand_seed, file_list=file_list, file_pct=file_pct)
@@ -49,6 +46,11 @@ class ImageClass(Dataset):
         self.classes.sort() # alphabetical sort of classes
         self.class_to_idx = dict(zip(self.classes, range(0, len(self.classes))))
         self.area = include_area
+
+        self.annotate_df_mapped = self.annotate_df.copy()
+        self.annotate_df_mapped["class"] = self.annotate_df_mapped["class"].map(self.class_to_idx)
+
+        self._by_file = {fname: g.reset_index(drop=True) for fname, g in self.annotate_df_mapped.groupby("filename")}
     
 
     # Make function to load images
@@ -63,83 +65,157 @@ class ImageClass(Dataset):
         return len(self.paths)
     
     # Overwrite the __getitem__() method (required for subclasses of torch.utils.data.Dataset)
+    # def __getitem__(self, index: int) -> Tuple[torch.Tensor, Dict]:
+    #     """
+    #     Returns one sample of data, in the form img, target, where
+    #     img is a torch.Tensor and target is a Dictonary of the form
+    #     target = {
+    #               "boxes":   Tensor[n_i, 4]  # float32, xyxy, absolute pixels
+    #               "labels":  Tensor[n_i]     # int64, in {0, ..., num_classes-1}
+    #               "image_id": Tensor[1]      # int64 unique id i.e. index
+    #               "area":    Tensor[n_i]     # float32 (box area in pixels)
+    #               "iscrowd": Tensor[n_i]     # int64 (0 or 1)
+    #             }
+    #     where n_i is the number of objects in the ith image.
+    #     """
+    #     img = decode_image(str(self.paths[index]))
+    #     img_name = self.paths[index].stem + '.jpg'
+    #     img_df = self.annotate_df[self.annotate_df['filename'] == img_name]
+    #     img_df.loc[:, 'class'] = img_df['class'].map(dict(self.class_to_idx, empty='empty'))
+
+    #     # Wrap into tv_tensors so transforms know how to move boxes with the image
+    #     # areas, iscrowd is not used so it is omitted to increase speed
+    #     _, H, W = img.shape
+
+    #     if 'empty' not in img_df['class'].unique():
+    #         # initialize boxes, labels, areas
+    #         boxes = torch.zeros(len(img_df), 4)
+    #         labels = torch.zeros(len(img_df), dtype=torch.int64)
+    #         if self.area:
+    #             areas = torch.zeros(len(img_df))
+    #         # populate via loop
+    #         for i in range(len(img_df)):
+    #             j = 0
+    #             labels[i] = torch.tensor(img_df.iloc[i]['class'], dtype=torch.int64)
+
+    #             for coord in ['xmin', 'ymin', 'xmax', 'ymax']:
+    #                 boxes[i, j] = img_df.iloc[i][coord]
+    #                 j = j + 1
+
+    #             if self.area:
+    #                 areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
+
+    #         # iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
+
+    #         boxes = tv_tensors.BoundingBoxes(boxes.to(dtype=torch.float32), format="XYXY", canvas_size=(H, W))
+
+    #         target = {
+    #                 'image_id': torch.tensor([index], dtype=torch.int64),
+    #                 'labels': labels,
+    #                 'boxes': boxes,
+    #                 #'areas': areas.to(device='cpu', dtype=torch.float32),
+    #                 #'iscrowd': iscrowd.to(device='cpu', dtype=torch.int64),
+    #                 }
+            
+    #         if self.area:
+    #             target['areas'] = areas.to(dtype=torch.float32)
+            
+    #         if self.transform is not None:
+    #             img, target = self.transform(img, target)
+
+    #         if self.area:
+    #             target['areas'] = (target['boxes'][:,2] - target['boxes'][:,0]).clamp(0, W) * (target['boxes'][:,3] - target['boxes'][:,1]).clamp(0, H)
+
+    #     # if the image is background
+    #     else:
+    #         target = {
+    #               'image_id': torch.tensor([index], dtype=torch.int64, device='cpu'),
+    #               'labels': torch.zeros((0,), dtype=torch.int64, device='cpu'),
+    #               'boxes': tv_tensors.BoundingBoxes(torch.zeros((0,4), dtype=torch.float32, device='cpu'), format="XYXY", canvas_size=(H, W)),
+    #               #'areas': torch.zeros((0,), dtype=torch.float32, device='cpu'),
+    #               #'iscrowd': torch.zeros((0,), dtype=torch.int64, device='cpu'),
+    #               }
+    #         if self.area:
+    #             target['areas'] = torch.zeros((0,), dtype=torch.float32, device='cpu')
+            
+    #         if self.transform is not None:
+    #             img, target = self.transform(img, target)
+
+    #     return img, target
+    
+
+
+
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, Dict]:
         """
-        Returns one sample of data, in the form img, target, where
-        img is a torch.Tensor and target is a Dictonary of the form
-        target = {
-                  "boxes":   Tensor[n_i, 4]  # float32, xyxy, absolute pixels
-                  "labels":  Tensor[n_i]     # int64, in {0, ..., num_classes-1}
-                  "image_id": Tensor[1]      # int64 unique id i.e. index
-                  "area":    Tensor[n_i]     # float32 (box area in pixels)
-                  "iscrowd": Tensor[n_i]     # int64 (0 or 1)
-                }
-        where n_i is the number of objects in the ith image.
-        """
-        img = decode_image(str(self.paths[index]))
-        img_name = self.paths[index].stem + '.jpg'
-        img_df = self.annotate_df[self.annotate_df['filename'] == img_name]
-        img_df.loc[:, 'class'] = img_df['class'].map(dict(self.class_to_idx, empty='empty'))
+        Returns img, target where:
 
-        # Wrap into tv_tensors so transforms know how to move boxes with the image
-        # areas, iscrowd is not used so it is omitted to increase speed
+        img: tv_tensors.Image or torch.Tensor [C,H,W], float32
+        target = {
+            "boxes":    Tensor[n_i, 4]  # float32, xyxy, absolute pixels
+            "labels":   Tensor[n_i]     # int64, in {0, ..., num_classes-1}
+            "image_id": Tensor[1]       # int64 (index)
+            "areas":  Tensor[n_i]       # float32, added if include_area=True
+            }
+        """
+        # 1) Load image
+        img_path = str(self.paths[index])
+        img = decode_image(img_path)  # expects CHW
         _, H, W = img.shape
 
-        if 'empty' not in img_df['class'].unique():
-            # initialize boxes, labels, areas
-            boxes = torch.zeros(len(img_df), 4)
-            labels = torch.zeros(len(img_df), dtype=torch.int64)
-            if self.area:
-                areas = torch.zeros(len(img_df))
-            # populate via loop
-            for i in range(len(img_df)):
-                j = 0
-                labels[i] = torch.tensor(img_df.iloc[i]['class'], dtype=torch.int64)
+        # 2) Fetch per-file annotations
+        img_name = self.paths[index].stem + ".jpg"
+        rows = self._by_file.get(img_name, None)  # DataFrame or None
 
-                for coord in ['xmin', 'ymin', 'xmax', 'ymax']:
-                    boxes[i, j] = img_df.iloc[i][coord]
-                    j = j + 1
-
-                if self.area:
-                    areas[i] = (boxes[i,2] - boxes[i,0]).clamp(min=0) * (boxes[i,3] - boxes[i,1]).clamp(min=0)
-
-            # iscrowd = torch.zeros(len(img_df), dtype=torch.int64)
-
-            boxes = tv_tensors.BoundingBoxes(boxes, format="XYXY", canvas_size=(H, W))
-
+        # 3) Background case: no rows or all classes NaN
+        if rows is None or rows["class"].notna().sum() == 0:
             target = {
-                    'image_id': torch.tensor([index], dtype=torch.int64).to(device=self.device),
-                    'labels': labels.to(device=self.device, dtype=torch.int64),
-                    'boxes': boxes.to(device=self.device, dtype=torch.float32),
-                    #'areas': areas.to(device=self.device, dtype=torch.float32),
-                    #'iscrowd': iscrowd.to(device=self.device, dtype=torch.int64),
-                    }
-            
-            if self.area:
-                target['areas'] = areas.to(device=self.device, dtype=torch.float32)
-            
-            if self.transform is not None:
-                img, target = self.transform(img, target)
-
-            if self.area:
-                target['areas'] = (target['boxes'][:,2] - target['boxes'][:,0]).clamp(0, W) * (target['boxes'][:,3] - target['boxes'][:,1]).clamp(0, H)
-
-        # if the image is background
+                      "image_id": torch.tensor([index], dtype=torch.int64),
+                      "labels": torch.empty(0, dtype=torch.int64),
+                      "boxes": tv_tensors.BoundingBoxes(torch.empty(0, 4, dtype=torch.float32),
+                                                  format="XYXY",
+                                                  canvas_size=(H, W),),
+                     }
         else:
+            # Keep only rows with valid class indices
+            rows = rows[rows["class"].notna()]
+
+            # vectorized labels
+            labels = torch.as_tensor(rows["class"].to_numpy(), dtype=torch.int64)
+
+            # vectorized boxes
+            box_cols = ["xmin", "ymin", "xmax", "ymax"]
+            boxes_np = rows[box_cols].to_numpy(dtype="float32", copy=False)
+            boxes = torch.from_numpy(boxes_np)  # [N,4], float32
+
+            boxes = tv_tensors.BoundingBoxes(
+                boxes,
+                format="XYXY",
+                canvas_size=(H, W),
+            )
+
             target = {
-                  'image_id': torch.tensor([index], dtype=torch.int64, device=self.device),
-                  'labels': torch.zeros((0,), dtype=torch.int64, device=self.device),
-                  'boxes': tv_tensors.BoundingBoxes(torch.zeros((0,4), dtype=torch.float32, device=self.device), format="XYXY", canvas_size=(H, W)),
-                  #'areas': torch.zeros((0,), dtype=torch.float32, device=self.device),
-                  #'iscrowd': torch.zeros((0,), dtype=torch.int64, device=self.device),
-                  }
-            if self.area:
-                target['areas'] = torch.zeros((0,), dtype=torch.float32, device=self.device)
-            
-            if self.transform is not None:
-                img, target = self.transform(img, target)
+                "image_id": torch.tensor([index], dtype=torch.int64),
+                "labels": labels,
+                "boxes": boxes,
+            }
+
+        # 4) Apply transforms (they know how to handle tv_tensors)
+        if self.transform is not None:
+            img, target = self.transform(img, target)
+
+        # 5) Optionally compute areas AFTER transforms, in the transformed space
+        if self.area:
+            _, H_new, W_new = img.shape
+            # target["boxes"] is BoundingBoxes; get underlying tensor view
+            boxes_t = target["boxes"].as_subclass(torch.Tensor)
+            w = (boxes_t[:, 2] - boxes_t[:, 0]).clamp(min=0, max=W_new)
+            h = (boxes_t[:, 3] - boxes_t[:, 1]).clamp(min=0, max=H_new)
+            target["areas"] = (w * h).to(torch.float32)
 
         return img, target
+
+
     
     
 
@@ -208,7 +284,7 @@ class ImageClass(Dataset):
         # ----- figure / axes -----
         H, W = arr.shape[:2]
         dpi = 100
-        fig, ax = plt.subplots(figsize=(W / dpi, H / dpi), dpi=dpi)
+        fig, ax = plt.subplots(1, 1, figsize=(6,6)) # plt.subplots(figsize=(W / dpi, H / dpi), dpi=dpi)
         ax.imshow(arr)  # y downward
 
         # ----- helper: to numpy float32 (N,4) -----
@@ -410,7 +486,6 @@ def make_train_test_split(full_set: ImageClass,
                           transform_train = None,
                           transform_test = None,
                           include_area: bool = False,
-                          device: str = 'cpu',
                           ) -> Tuple[ImageClass, ImageClass]:
         """
         Create a group stratified train/test split of an image class.
@@ -451,7 +526,7 @@ def make_train_test_split(full_set: ImageClass,
         test_files = df['filename'].iloc[te_idx].drop_duplicates().to_list()
 
         # create training/testing ImageClass files
-        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files, transform=transform_train, include_area=include_area, device=device)
-        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files, transform=transform_test, include_area=include_area, device=device)
+        train_IC = ImageClass(targ_dir=full_set.directory, file_list=train_files, transform=transform_train, include_area=include_area)
+        test_IC = ImageClass(targ_dir=full_set.directory, file_list=test_files, transform=transform_test, include_area=include_area)
 
         return train_IC, test_IC

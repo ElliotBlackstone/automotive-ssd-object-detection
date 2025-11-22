@@ -837,51 +837,59 @@ def load_checkpoint(path: str | Path,
 
 
 
-
-
-
-
 def collate_detection(batch):
-    imgs, tgts = [], []
-    for sample in batch:
-        if isinstance(sample, dict):
-            img = sample["image"]
-            tgt = sample
-        else:
-            img, tgt = sample
+    # batch: list of (img, target) tuples
+    imgs  = [img for img, _ in batch]
+    tgts  = [tgt for _, tgt in batch]
 
-        # assume dataset already produced float32 CxHxW tensors
-        # avoid redundant copies; only enforce contiguous when stacking
-        assert torch.is_tensor(img) and img.ndim == 3 and img.size(0) in (1,3)
-        imgs.append(img)
+    # imgs are already float32 CxHxW tensors (or tv_tensors.Image),
+    # so stacking is enough
+    return torch.stack(imgs, dim=0), tgts
 
-        b = tgt.get("boxes", None)
-        l = tgt.get("labels", None)
 
-        if isinstance(b, TVBoxes):
-            b = b.as_subclass(torch.Tensor)  # cheap view, keeps dtype/stride
-        if b is None:
-            b = torch.zeros((0,4), dtype=torch.float32)
-        else:
-            b = b.to(dtype=torch.float32)
-            b = b.view(-1, 4)  # no-op if already [G,4]
 
-        if l is None:
-            l = torch.zeros((0,), dtype=torch.long)
-        else:
-            l = l.to(dtype=torch.long).view(-1)
 
-        # minimal target dict
-        tgts.append({
-            "boxes": b.contiguous(),          # keep contiguous small tensors
-            "labels": l.contiguous(),
-            # include only what your loss needs; if you need ids:
-            "image_id": tgt.get("image_id", None),
-            # add iscrowd/area if your loss needs them; avoid unnecessary keys
-        })
+# def collate_detection(batch):
+#     imgs, tgts = [], []
+#     for sample in batch:
+#         if isinstance(sample, dict):
+#             img = sample["image"]
+#             tgt = sample
+#         else:
+#             img, tgt = sample
 
-    # one contiguous copy here is fine
-    return torch.stack([im.contiguous() for im in imgs], 0), tgts
+#         # assume dataset already produced float32 CxHxW tensors
+#         # avoid redundant copies; only enforce contiguous when stacking
+#         assert torch.is_tensor(img) and img.ndim == 3 and img.size(0) in (1,3)
+#         imgs.append(img)
+
+#         b = tgt.get("boxes", None)
+#         l = tgt.get("labels", None)
+
+#         if isinstance(b, TVBoxes):
+#             b = b.as_subclass(torch.Tensor)  # cheap view, keeps dtype/stride
+#         if b is None:
+#             b = torch.zeros((0,4), dtype=torch.float32)
+#         else:
+#             b = b.to(dtype=torch.float32)
+#             b = b.view(-1, 4)  # no-op if already [G,4]
+
+#         if l is None:
+#             l = torch.zeros((0,), dtype=torch.long)
+#         else:
+#             l = l.to(dtype=torch.long).view(-1)
+
+#         # minimal target dict
+#         tgts.append({
+#             "boxes": b.contiguous(),          # keep contiguous small tensors
+#             "labels": l.contiguous(),
+#             # include only what your loss needs; if you need ids:
+#             "image_id": tgt.get("image_id", None),
+#             # add iscrowd/area if your loss needs them; avoid unnecessary keys
+#         })
+
+#     # one contiguous copy here is fine
+#     return torch.stack([im.contiguous() for im in imgs], 0), tgts
 
 
 
