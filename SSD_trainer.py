@@ -12,6 +12,7 @@ from PIL import Image
 from typing import Tuple, Dict, List
 import pandas as pd
 import numpy as np
+import math
 import random
 import os
 
@@ -32,16 +33,13 @@ from SSD_from_scratch import mySSD
 # TODO: write function that takes a .jpg image as an input
 #       and returns an image of the same size with bounding
 #       box and labels.
-# TODO: write collate_batch docstring
 
 
 
 def SSD_train_step(model: mySSD,
                    dataloader: torch.utils.data.DataLoader,
                    optimizer: torch.optim.Optimizer,
-                   priors_cxcywh: torch.Tensor,
                    iou_thresh: float = 0.5,
-                   variances: Tuple[float, float] = (0.1, 0.2),
                    neg_pos_ratio: float = 3.0,
                    device: str = 'cpu',
                    timing: bool = False,
@@ -52,7 +50,6 @@ def SSD_train_step(model: mySSD,
     model: SSD model to be trained
     dataloader: Data on which the model is to be trained
     optimizer: Optimizer, e.g. SGD, Adam, etc.
-    priors_cxcywh: Tensor of priors with shape [P, 4]
     iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
     neg_pos_ratio: Negative to positive ratio for hard negative mining, float greater than 0.
     device: 'cpu' or 'cuda'
@@ -110,12 +107,12 @@ def SSD_train_step(model: mySSD,
         if timing:
             t0_build_tar = time.perf_counter()
         
-        pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=priors_cxcywh,
+        pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=model.priors,
                                                   targets=targets,
                                                   H=images.shape[-2],
                                                   W=images.shape[-1],
                                                   iou_thresh=iou_thresh,
-                                                  variances=variances,
+                                                  variances=(model.variance_center, model. variance_size),
                                                   device=device)
         
         if timing:
@@ -178,13 +175,11 @@ def SSD_train_step(model: mySSD,
 
 def SSD_test_step(model: mySSD,
                   dataloader: torch.utils.data.DataLoader,
-                  priors_cxcywh: torch.Tensor,
                   iou_thresh: float = 0.5,
-                  variances: Tuple[float, float] = (0.1, 0.2),
                   neg_pos_ratio: float = 3.0,
-                # score_thresh=0.05,
-                # nms_iou=0.5,
-                # max_detections_per_img=200,
+                  score_thresh: float = 0.05,
+                  nms_thresh: float = 0.5,
+                  max_detections_per_img: int = 200,
                   device: str = 'cpu',
                   timing: bool = False,
                   ):
@@ -192,10 +187,11 @@ def SSD_test_step(model: mySSD,
     Inputs
     model: mySSD class model to be tested
     dataloader: Data on which the model is to be tested
-    priors_cxcywh: Tensor of priors with shape [P, 4]
     iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
-    variances: 
     neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
+    score_thresh:
+    nms_thresh:
+    max_detections_per_img:
     device: 'cpu' or 'cuda'
     timing: Boolean for enabling/disabling timing
 
@@ -230,16 +226,14 @@ def SSD_test_step(model: mySSD,
                     targets[i][key] = targets[i][key].to(device=device, non_blocking=True)
 
             loc_all, conf_all = model(images)
-            N, P, C = conf_all.shape          # N - batch size, P - number of priors (8732), C - number of classes
-            H, W = images.shape[-2], images.shape[-1]
 
             # ---------- Build targets (same as train) ----------
-            pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=priors_cxcywh,
+            pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=model.priors,
                                                       targets=targets,
                                                       H=images.shape[-2],
                                                       W=images.shape[-1],
                                                       iou_thresh=iou_thresh,
-                                                      variances=variances,
+                                                      variances=(model.variance_center, model.variance_size),
                                                       device=device)
         
             # number of positives per image (avoid zero division)
@@ -269,9 +263,9 @@ def SSD_test_step(model: mySSD,
                 t0_pred = time.perf_counter()
 
             preds = model.predict(images=images,
-                                  score_thresh=0.2,
-                                  nms_thresh=0.5,
-                                  max_per_img=100,
+                                  score_thresh=score_thresh,
+                                  nms_thresh=nms_thresh,
+                                  max_per_img=max_detections_per_img,
                                   class_agnostic=False,
                                   pre_loc_all=loc_all,
                                   pre_conf_all=conf_all)
@@ -311,12 +305,13 @@ def SSD_train(model: torch.nn.Module,
               train_dataloader: torch.utils.data.DataLoader,
               test_dataloader: torch.utils.data.DataLoader,
               optimizer: torch.optim.Optimizer,
-              priors_cxcywh: torch.Tensor,
               scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
               sched_step_w_opt: bool = False,
               iou_thresh: float = 0.5,
-              variances: Tuple[float, float] = (0.1, 0.2),
               neg_pos_ratio: float = 3.0,
+              score_thresh: float = 0.05,
+              nms_thresh: float = 0.5,
+              max_detections_per_img: int = 200,
               epochs: int = 5,
               early_stopping_rounds: int | None = None,
               device: str = 'cpu',
@@ -333,9 +328,7 @@ def SSD_train(model: torch.nn.Module,
     train_dataloader: Data on which the model is to be trained
     test_dataloader: Data on which the model is to be tested
     optimizer: Optimizer, e.g. SGD, Adam, etc.
-    priors_cxcywh: Tensor of priors with shape [P, 4]
     iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
-    variances: 
     neg_pos_ratio: Negative to positive ratio for hard negative mining, float greater than 0.
     epochs: Integer number (>0) of train/test cycles
     early_stopping_rounds: Integer or None. Stop the train/test cycle if the testing score
@@ -355,8 +348,13 @@ def SSD_train(model: torch.nn.Module,
     (P - number of priors (8732))
     """
     # device check
-    if (device != 'cpu') & (device != 'cuda'):
+    if device not in ("cpu", "cuda"):
         raise ValueError(f"device must be 'cpu' or 'cuda', recieved {device}.")
+    
+    if save_model and SAVE_DIR is None:
+        raise TypeError("If the model is to be saved, SAVE_DIR must be specified.")
+    
+    best_err = None  # will be set on first epoch if save_model is True
     
     if past_train_dict is not None:
         past_epochs = past_train_dict['epochs'][0]
@@ -376,35 +374,23 @@ def SSD_train(model: torch.nn.Module,
                "testing timing": [],}
     
     for epoch in tqdm(range(epochs)):
-        if sched_step_w_opt:
-            train_dict = SSD_train_step(model=model,
-                                        dataloader=train_dataloader,
-                                        optimizer=optimizer,
-                                        priors_cxcywh=priors_cxcywh,
-                                        iou_thresh=iou_thresh,
-                                        variances=variances,
-                                        neg_pos_ratio=neg_pos_ratio,
-                                        device=device,
-                                        timing=timing,
-                                        scheduler=scheduler)
-        else:
-            train_dict = SSD_train_step(model=model,
-                                        dataloader=train_dataloader,
-                                        optimizer=optimizer,
-                                        priors_cxcywh=priors_cxcywh,
-                                        iou_thresh=iou_thresh,
-                                        variances=variances,
-                                        neg_pos_ratio=neg_pos_ratio,
-                                        device=device,
-                                        timing=timing,
-                                        scheduler=None)
+        train_dict = SSD_train_step(model=model,
+                                    dataloader=train_dataloader,
+                                    optimizer=optimizer,
+                                    iou_thresh=iou_thresh,
+                                    neg_pos_ratio=neg_pos_ratio,
+                                    device=device,
+                                    timing=timing,
+                                    scheduler=scheduler if sched_step_w_opt else None)
+
         
         test_dict = SSD_test_step(model=model,
                                   dataloader=test_dataloader,
-                                  priors_cxcywh=priors_cxcywh,
                                   iou_thresh=iou_thresh,
-                                  variances=variances,
                                   neg_pos_ratio=neg_pos_ratio,
+                                  nms_thresh=nms_thresh,
+                                  score_thresh=score_thresh,
+                                  max_detections_per_img=max_detections_per_img,
                                   device=device,
                                   timing=timing)
         
@@ -426,71 +412,145 @@ def SSD_train(model: torch.nn.Module,
 
 
         # Early stopping rounds
-        if early_stopping_rounds != None:
-            # if/else statement to monitor consequtive rounds of error
-            # initialize error
+        if early_stopping_rounds is not None:
+            # choose a metric: either test_dict["testing loss"] or -test_dict["mAP"]["map_50"]
+            val_metric = test_dict["mAP"]["map_50"]
+
             if epoch == 0:
-                best_error_loc = test_dict['localization loss']
-                best_error_conf = test_dict['classification loss']
-            
-            # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
-            if best_error_loc >= test_dict['localization loss']:
-                best_error_loc = test_dict['localization loss']
-                conseq_rounds_loc = 0
-            # if test loss is going up, best_error stays the same and conseq_rounds counter goes up
+                best_metric = val_metric
+                conseq_rounds = 0
             else:
-                conseq_rounds_loc += 1
-                
-                if conseq_rounds_loc >= early_stopping_rounds:
-                    print(f"Early stopping rounds ({early_stopping_rounds}) reached. (localization)")
-                    results['epochs'][0] = epoch+past_epochs
-                    break
+                if val_metric <= best_metric:
+                    best_metric = val_metric
+                    conseq_rounds = 0
+                else:
+                    conseq_rounds += 1
+                    if conseq_rounds >= early_stopping_rounds:
+                        print(f"Early stopping after {early_stopping_rounds} rounds without improvement.")
+                        results["epochs"][0] = epoch + past_epochs
+                        break
+
+        # if early_stopping_rounds != None:
+        #     # if/else statement to monitor consequtive rounds of error
+        #     # initialize error
+        #     if epoch == 0:
+        #         best_error_loc = test_dict['localization loss']
+        #         best_error_conf = test_dict['classification loss']
             
-            # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
-            if best_error_conf >= test_dict['classification loss']:
-                best_error_conf = test_dict['classification loss']
-                conseq_rounds_conf = 0
-            # if test loss is going up, best_error stays the same and conseq_rounds counter goes up
-            else:
-                conseq_rounds_conf += 1
+        #     # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
+        #     if best_error_loc >= test_dict['localization loss']:
+        #         best_error_loc = test_dict['localization loss']
+        #         conseq_rounds_loc = 0
+        #     # if test loss is going up, best_error stays the same and conseq_rounds counter goes up
+        #     else:
+        #         conseq_rounds_loc += 1
                 
-                if conseq_rounds_conf >= early_stopping_rounds:
-                    print(f"Early stopping rounds ({early_stopping_rounds}) reached. (classification)")
-                    results['epochs'][0] = epoch+past_epochs
-                    break
+        #         if conseq_rounds_loc >= early_stopping_rounds:
+        #             print(f"Early stopping rounds ({early_stopping_rounds}) reached. (localization)")
+        #             results['epochs'][0] = epoch+past_epochs
+        #             break
+            
+        #     # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
+        #     if best_error_conf >= test_dict['classification loss']:
+        #         best_error_conf = test_dict['classification loss']
+        #         conseq_rounds_conf = 0
+        #     # if test loss is going up, best_error stays the same and conseq_rounds counter goes up
+        #     else:
+        #         conseq_rounds_conf += 1
+                
+        #         if conseq_rounds_conf >= early_stopping_rounds:
+        #             print(f"Early stopping rounds ({early_stopping_rounds}) reached. (classification)")
+        #             results['epochs'][0] = epoch+past_epochs
+        #             break
         
 
         
 
         # Saving the model
-        if save_model == True:
+        # if save_model == True:
 
-            if SAVE_DIR is None:
-                raise TypeError("If the model is to be saved, SAVE_DIR must be specified.")
+        #     if SAVE_DIR is None:
+        #         raise TypeError("If the model is to be saved, SAVE_DIR must be specified.")
             
-            # initialize best error
-            val_err = test_dict['testing loss']
-            if epoch == 0:
+        #     # initialize best error
+        #     val_err = test_dict['testing loss']
+        #     if epoch == 0:
+        #         best_err = val_err
+            
+        #     loss_dict = merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results
+            
+        #     # save a rolling "last"
+        #     if epoch_save_interval is None:
+        #         save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
+        #                         best_metric=best_err, outdir=SAVE_DIR, tag="last")
+
+        #     # save every epoch_save_interval epochs
+        #     if epoch_save_interval is not None:
+        #         if (epoch + 1) % epoch_save_interval == 0:
+        #             save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
+        #                             best_metric=best_err, outdir=SAVE_DIR, tag=f"epoch_{epoch+past_epochs+1:03d}")
+
+        #     # keep a separate "best" snapshot
+        #     if (save_best_model == True) & (val_err < best_err):
+        #         best_err = val_err
+        #         save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
+        #                         best_metric=best_err, outdir=SAVE_DIR, tag="best")
+                
+        if save_model:
+            val_err = test_dict["testing loss"]
+
+            # initialize best_err on first saving epoch
+            if best_err is None:
                 best_err = val_err
-            
-            loss_dict = merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results
-            
-            # save a rolling "last"
-            if epoch_save_interval is None:
-                save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
-                                best_metric=best_err, outdir=SAVE_DIR, tag="last")
 
-            # save every epoch_save_interval epochs
-            if epoch_save_interval is not None:
-                if (epoch + 1) % epoch_save_interval == 0:
-                    save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
-                                    best_metric=best_err, outdir=SAVE_DIR, tag=f"epoch_{epoch+past_epochs+1:03d}")
+            # build loss_dict only if we're going to save something this epoch
+            will_save_last   = (epoch_save_interval is None)
+            will_save_period = (epoch_save_interval is not None
+                                and (epoch + 1) % epoch_save_interval == 0)
+            will_save_best   = (save_best_model and (val_err < best_err))
 
-            # keep a separate "best" snapshot
-            if (save_best_model == True) & (val_err < best_err):
+            if will_save_last or will_save_period or will_save_best:
+                loss_dict = (merge_dicts_preserve_order(past_train_dict, results)
+                            if past_train_dict is not None else results)
+
+            # rolling "last" snapshot
+            if will_save_last:
+                save_checkpoint(epoch=epoch + past_epochs + 1,  # choose 1-based consistently
+                                model=model,
+                                loss_dict=loss_dict,
+                                optimizer=optimizer,
+                                scheduler=scheduler,
+                                scaler=None,
+                                best_metric=val_err,   # metric at this epoch
+                                outdir=SAVE_DIR,
+                                tag="last",)
+
+            # periodic labeled checkpoints
+            if will_save_period:
+                save_checkpoint(epoch=epoch + past_epochs + 1,
+                                model=model,
+                                loss_dict=loss_dict,
+                                optimizer=optimizer,
+                                scheduler=scheduler,
+                                scaler=None,
+                                best_metric=val_err,   # metric at this epoch
+                                outdir=SAVE_DIR,
+                                tag=f"epoch_{epoch + past_epochs + 1:03d}",)
+
+            # separate "best" snapshot
+            if will_save_best:
                 best_err = val_err
-                save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
-                                best_metric=best_err, outdir=SAVE_DIR, tag="best")
+                save_checkpoint(epoch=epoch + past_epochs + 1,
+                                model=model,
+                                loss_dict=loss_dict,
+                                optimizer=optimizer,
+                                scheduler=scheduler,
+                                scaler=None,
+                                best_metric=best_err,  # global best so far
+                                outdir=SAVE_DIR,
+                                tag="best",)
+
+
 
     # return results
     return merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results
@@ -526,7 +586,7 @@ def build_targets(priors_cxcywh: torch.Tensor,
     (B - batch size, P - number of priors (8732), C - number of classes (including background))
     """
     # protect IoU threshold
-    if (iou_thresh >= 1) | (iou_thresh <= 0):
+    if not (0.0 < iou_thresh < 1.0):
             raise ValueError(f"Score threshold should be greater than 0 and less than 1, recieved {iou_thresh}.")
     
     norm = torch.tensor([W, H, W, H], device=device, dtype=torch.float32)
@@ -1106,3 +1166,152 @@ class ConditionalIoUCrop(torch.nn.Module):
 
         return img_out, tgt_out
 
+
+
+
+def get_cosine_schedule_with_warmup(
+    optimizer: torch.optim.Optimizer,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    min_lr: float = 0.0,
+    last_epoch: int = -1,
+) -> torch.optim.lr_scheduler.LambdaLR:
+    """
+    Cosine decay with linear warmup.
+
+    LR(t) = base_lr * f(t), where f(t) is:
+      - warmup: linearly from 0 -> 1 over [0, num_warmup_steps)
+      - cosine: from 1 -> (min_lr / base_lr) over [num_warmup_steps, num_training_steps]
+
+    Arguments
+    ---------
+    optimizer : torch.optim.Optimizer
+        Optimizer whose learning rate will be scheduled.
+    num_warmup_steps : int
+        Number of steps for linear warmup.
+    num_training_steps : int
+        Total number of training steps (epochs * steps_per_epoch).
+    min_lr : float, default 0.0
+        Absolute minimum learning rate. Implemented as a ratio of base_lr.
+    last_epoch : int, default -1
+        See PyTorch docs for LambdaLR (use -1 when creating scheduler).
+
+    Returns
+    -------
+    torch.optim.lr_scheduler.LambdaLR
+        Scheduler to be stepped *once per optimizer step*.
+    """
+    # we implement min_lr by enforcing a minimum multiplicative factor
+    # relative to base_lr; per param group the ratio may differ.
+    # -> for each param group, factor(t) in [min_ratio, 1]
+    # where min_ratio = min_lr / base_lr_group
+    base_lrs = [group["lr"] for group in optimizer.param_groups]
+
+    # sanity check assumptions
+    if num_warmup_steps < 0:
+        raise ValueError("num_warmup_steps must be >= 0")
+    if num_training_steps <= 0:
+        raise ValueError("num_training_steps must be > 0")
+    if num_warmup_steps > num_training_steps:
+        raise ValueError("num_warmup_steps cannot exceed num_training_steps")
+
+    def lr_lambda(current_step: int):
+        # this returns one factor per param group
+        factors = []
+        for base_lr in base_lrs:
+            if min_lr > base_lr:
+                raise ValueError("min_lr cannot be larger than base_lr")
+
+            min_ratio = min_lr / base_lr if base_lr > 0 else 0.0
+
+            if current_step < num_warmup_steps and num_warmup_steps > 0:
+                # linear warmup: 0 -> 1
+                warmup_frac = float(current_step) / float(max(1, num_warmup_steps))
+                factor = warmup_frac  # in [0,1]
+            else:
+                # cosine phase
+                progress = float(current_step - num_warmup_steps) / float(
+                    max(1, num_training_steps - num_warmup_steps)
+                )
+                progress = min(max(progress, 0.0), 1.0)  # clamp numerically
+
+                # pure cosine from 1 -> 0
+                cosine = 0.5 * (1.0 + math.cos(math.pi * progress))  # in [0,1]
+
+                # rescale to [min_ratio, 1]
+                factor = min_ratio + (1.0 - min_ratio) * cosine
+
+            factors.append(factor)
+
+        # LambdaLR expects a scalar or list; we give a list per param group
+        # via this hack: return factors for the *first* call, then overwrite
+        # param_group["lr"] manually. But LambdaLR actually supports returning
+        # a scalar that applies to all groups. To support per-group ratios,
+        # we instead pass a scalar and rely on equal base_lrs.
+        #
+        # If you want per-group LR, tighten the design. For now, assume all
+        # param groups share the same base_lr.
+        return factors[0]
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=last_epoch)
+
+
+def build_optimizer_and_scheduler(
+    model: torch.nn.Module,
+    train_dataloader: torch.utils.data.DataLoader,
+    max_epochs: int = 120,
+    warmup_epochs: int = 5,
+    base_lr: float = 3e-3,
+    min_lr: float = 1e-5,
+    momentum: float = 0.9,
+    weight_decay: float = 5e-4,
+):
+    """
+    Create SGD optimizer and cosine-with-warmup scheduler
+    for an SSD-style detector.
+
+    Arguments
+    ---------
+    model : nn.Module
+        Your SSD model.
+    train_dataloader : DataLoader
+        Only used to infer steps_per_epoch.
+    max_epochs : int
+        Total number of epochs you plan to train.
+    warmup_epochs : int
+        Number of warmup epochs (linear LR increase).
+    base_lr : float
+        Peak learning rate after warmup.
+    min_lr : float
+        Minimum LR at the end of cosine decay.
+    momentum : float
+        Momentum for SGD.
+    weight_decay : float
+        L2 weight decay.
+
+    Returns
+    -------
+    optimizer : torch.optim.SGD
+    scheduler : torch.optim.lr_scheduler._LRScheduler
+        Must be stepped *once per optimizer step*.
+    """
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=base_lr,
+        momentum=momentum,
+        weight_decay=weight_decay,
+        nesterov=True,
+    )
+
+    steps_per_epoch = len(train_dataloader)
+    num_training_steps = max_epochs * steps_per_epoch
+    num_warmup_steps = warmup_epochs * steps_per_epoch
+
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=num_training_steps,
+        min_lr=min_lr,
+    )
+
+    return optimizer, scheduler

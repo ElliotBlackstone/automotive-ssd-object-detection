@@ -364,10 +364,10 @@ class mySSD(nn.Module):
         """
 
         # make sure score, nms threshold are valid
-        if (score_thresh >= 1) | (score_thresh <= 0):
+        if not (0.0 <= score_thresh < 1.0):
             raise ValueError(f"Score threshold should be greater than 0 and less than 1, recieved {score_thresh}.")
         
-        if (nms_thresh >= 1) | (nms_thresh <= 0):
+        if not (0.0 < nms_thresh < 1.0):
             raise ValueError(f"NMS threshold should be greater than 0 and less than 1, recieved {nms_thresh}.")
         
         self.eval()
@@ -384,40 +384,72 @@ class mySSD(nn.Module):
 
         # softmax and drop background
         scores_all = conf_all.softmax(dim=-1)[..., 1:]   # (B,P,C-1)
-        num_fg = C - 1
 
         H, W = self.img_h, self.img_w
         v_c, v_s = self.variance_center, self.variance_size
-        priors = self.priors.to(device)
+        priors = self.priors
+        if priors.device != device:
+            priors = priors.to(device)
 
         out: List[Dict[str, object]] = []
 
         for b in range(B):
+            # scores for this image: [P,num_fg]
+            b_scores = scores_all[b]
+
+            # threshold BEFORE decoding
+            keep_mask = b_scores > score_thresh  # [P,num_fg]
+            if not keep_mask.any():
+                out.append({
+                    "labels": torch.empty(0, dtype=torch.int64, device=device),
+                    "scores": torch.empty(0, dtype=torch.float32, device=device),
+                    "boxes":  priors.new_zeros((0, 4))
+                })
+                continue
+            # indices of priors and class-ids that survive threshold
+            # pri_idx: [M], cls0_idx: [M]
+            pri_idx, cls0_idx = keep_mask.nonzero(as_tuple=True)
+
+            # slice loc + priors to those M priors
+            loc_sel    = loc_all[b, pri_idx]  # [M,4] offsets for kept priors
+            priors_sel = priors[pri_idx]      # [M,4] priors for kept priors
+
+            # decode only these M priors to normalized cxcywh
+            boxes_cxcywh = self.decode_ssd(loc=loc_sel,
+                                           priors=priors_sel,
+                                           variances=(v_c, v_s))  # [M,4]
+
             # decode to normalized cxcywh
-            boxes_cxcywh = self.decode_ssd(loc_all[b], priors, variances=(v_c, v_s))  # (P,4)
+            # boxes_cxcywh = self.decode_ssd(loc_all[b], priors, variances=(v_c, v_s))  # (P,4)
             # cxcywh -> pixel xyxy + clamp
             cx, cy, w, h = boxes_cxcywh.unbind(dim=1)
             x1 = (cx - 0.5 * w).clamp(0, 1) * W
             y1 = (cy - 0.5 * h).clamp(0, 1) * H
             x2 = (cx + 0.5 * w).clamp(0, 1) * W
             y2 = (cy + 0.5 * h).clamp(0, 1) * H
-            boxes_xyxy = torch.stack([x1, y1, x2, y2], dim=1)                     # (P,4)
+            # boxes_xyxy = torch.stack([x1, y1, x2, y2], dim=1)                     # (P,4)
 
-            b_scores = scores_all[b]                                              # (P,num_fg)
-            keep_mask = b_scores > score_thresh                                   # (P,num_fg)
+            sel_boxes = torch.stack([x1, y1, x2, y2], dim=1)  # [M,4]
 
-            if not keep_mask.any():
-                out.append({
-                    "labels": torch.empty(0, dtype=torch.int64, device=device),
-                    "scores": torch.empty(0, dtype=torch.float32, device=device),
-                    "boxes": boxes_xyxy.new_zeros((0, 4))
-                })
-                continue
+            # scores / labels for these kept (prior, class) pairs
+            sel_scores  = b_scores[pri_idx, cls0_idx]  # [M]
+            sel_labels0 = cls0_idx                     # [M], 0-based foreground labels
 
-            pri_idx, cls0_idx = keep_mask.nonzero(as_tuple=True)                   # 0-based class ids
-            sel_boxes  = boxes_xyxy[pri_idx]                                       # (M,4)
-            sel_scores = b_scores[pri_idx, cls0_idx]                               # (M,)
-            sel_labels0 = cls0_idx                                                 # (M,)
+            # b_scores = scores_all[b]                                              # (P,num_fg)
+            # keep_mask = b_scores > score_thresh                                   # (P,num_fg)
+
+            # if not keep_mask.any():
+            #     out.append({
+            #         "labels": torch.empty(0, dtype=torch.int64, device=device),
+            #         "scores": torch.empty(0, dtype=torch.float32, device=device),
+            #         "boxes": boxes_xyxy.new_zeros((0, 4))
+            #     })
+            #     continue
+
+            # pri_idx, cls0_idx = keep_mask.nonzero(as_tuple=True)                   # 0-based class ids
+            # sel_boxes  = boxes_xyxy[pri_idx]                                       # (M,4)
+            # sel_scores = b_scores[pri_idx, cls0_idx]                               # (M,)
+            # sel_labels0 = cls0_idx                                                 # (M,)
 
             # NMS
             if class_agnostic:
@@ -425,21 +457,29 @@ class mySSD(nn.Module):
                 # ensure highest-score first before truncation
                 keep = keep[sel_scores[keep].argsort(descending=True)]
             else:
+                # kept = []
+                # for c in sel_labels0.unique():
+                #     m = (sel_labels0 == c)
+                #     if m.any():
+                #         idx_local = self.iou_nms(sel_boxes[m], sel_scores[m], iou_threshold=nms_thresh)
+                #         kept.append(m.nonzero(as_tuple=True)[0][idx_local])
+                # keep = torch.cat(kept, dim=0)
                 kept = []
                 for c in sel_labels0.unique():
-                    m = (sel_labels0 == c)
-                    if m.any():
-                        idx_local = self.iou_nms(sel_boxes[m], sel_scores[m], iou_threshold=nms_thresh)
-                        kept.append(m.nonzero(as_tuple=True)[0][idx_local])
+                    idx_c = (sel_labels0 == c).nonzero(as_tuple=True)[0]
+                    if idx_c.numel() == 0:
+                        continue
+                    idx_local = self.iou_nms(sel_boxes[idx_c], sel_scores[idx_c], iou_threshold=nms_thresh)
+                    kept.append(idx_c[idx_local])
                 keep = torch.cat(kept, dim=0)
                 keep = keep[sel_scores[keep].argsort(descending=True)]
 
             keep = keep[:max_per_img]
 
             
-            labels_out = sel_labels0[keep].to(torch.int64)                                         # Tensor
-            scores_out = sel_scores[keep].to(torch.float32)                                        # Tensor
-            boxes_out  = sel_boxes[keep].to(torch.float32)                                         # Tensor[K,4]
+            labels_out = sel_labels0[keep]                                       # Tensor
+            scores_out = sel_scores[keep]                                        # Tensor
+            boxes_out  = sel_boxes[keep]                                         # Tensor[K,4]
 
             out.append({
                 "labels": labels_out,
