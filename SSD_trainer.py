@@ -45,6 +45,7 @@ def SSD_train_step(model: mySSD,
                    neg_pos_ratio: float = 3.0,
                    device: str = 'cpu',
                    timing: bool = False,
+                   scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
                    ) -> Dict:
     """
     Inputs
@@ -138,30 +139,6 @@ def SSD_train_step(model: mySSD,
                                               total_pos=total_pos,
                                               neg_pos_ratio=neg_pos_ratio,
                                               device=device)
-        # cross-entropy per prior (no reduction)
-        # ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction='none').view(B, P)  # [B, P]
-
-        # # keep CE on positives always
-        # ce_pos = (ce * pos_mask.float()).sum()
-
-        # # select hardest negatives per image at ratio R:1 w.r.t positives
-        # ce_neg_sum = torch.tensor(0.0, device=device)
-        # for i in range(B):
-        #     n_pos = int(num_pos_per_img[i].item())
-        #     if n_pos == 0:
-        #         # still allow some negatives to contribute (common trick: pretend 1 positive)
-        #         max_negs = int(neg_pos_ratio)
-        #     else:
-        #         max_negs = int(neg_pos_ratio * n_pos)
-
-        #     ce_neg_i = ce[i].masked_select(~pos_mask[i])         # [#neg_i]
-        #     if ce_neg_i.numel() == 0 or max_negs == 0:
-        #         continue
-        #     k = min(max_negs, ce_neg_i.numel())
-        #     topk_vals, _ = torch.topk(ce_neg_i, k, largest=True, sorted=False)
-        #     ce_neg_sum += topk_vals.sum()
-
-        # conf_loss = (ce_pos + ce_neg_sum) / total_pos
 
         # loss
         batch_loss = batch_loc_loss + batch_conf_loss
@@ -178,6 +155,9 @@ def SSD_train_step(model: mySSD,
 
         # optimizer step
         optimizer.step()
+
+        if scheduler is not None:
+            scheduler.step()
 
         batch_count += 1
 
@@ -279,20 +259,6 @@ def SSD_test_step(model: mySSD,
                                                   neg_pos_ratio=neg_pos_ratio,
                                                   device=device)
             
-            # ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction="none").view(N, P)
-            # ce_pos = (ce * pos_mask.float()).sum()
-
-            # ce_neg_sum = torch.tensor(0.0, device=device)
-            # for i in range(N):
-            #     n_pos = int(num_pos_per_img[i].item())
-            #     max_negs = int(neg_pos_ratio * n_pos) if n_pos > 0 else int(neg_pos_ratio)
-            #     ce_neg_i = ce[i].masked_select(~pos_mask[i])   # [#neg_i]
-            #     if ce_neg_i.numel() > 0 and max_negs > 0:
-            #         k = min(max_negs, ce_neg_i.numel())
-            #         ce_neg_sum += ce_neg_i.topk(k, largest=True).values.sum()
-
-            # batch_conf_loss = (ce_pos + ce_neg_sum) / total_pos
-            
             batch_total_loss = batch_loc_loss + batch_conf_loss
 
             loc_loss += batch_loc_loss.item()
@@ -347,6 +313,7 @@ def SSD_train(model: torch.nn.Module,
               optimizer: torch.optim.Optimizer,
               priors_cxcywh: torch.Tensor,
               scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+              sched_step_w_opt: bool = False,
               iou_thresh: float = 0.5,
               variances: Tuple[float, float] = (0.1, 0.2),
               neg_pos_ratio: float = 3.0,
@@ -409,15 +376,28 @@ def SSD_train(model: torch.nn.Module,
                "testing timing": [],}
     
     for epoch in tqdm(range(epochs)):
-        train_dict = SSD_train_step(model=model,
-                                    dataloader=train_dataloader,
-                                    optimizer=optimizer,
-                                    priors_cxcywh=priors_cxcywh,
-                                    iou_thresh=iou_thresh,
-                                    variances=variances,
-                                    neg_pos_ratio=neg_pos_ratio,
-                                    device=device,
-                                    timing=timing)
+        if sched_step_w_opt:
+            train_dict = SSD_train_step(model=model,
+                                        dataloader=train_dataloader,
+                                        optimizer=optimizer,
+                                        priors_cxcywh=priors_cxcywh,
+                                        iou_thresh=iou_thresh,
+                                        variances=variances,
+                                        neg_pos_ratio=neg_pos_ratio,
+                                        device=device,
+                                        timing=timing,
+                                        scheduler=scheduler)
+        else:
+            train_dict = SSD_train_step(model=model,
+                                        dataloader=train_dataloader,
+                                        optimizer=optimizer,
+                                        priors_cxcywh=priors_cxcywh,
+                                        iou_thresh=iou_thresh,
+                                        variances=variances,
+                                        neg_pos_ratio=neg_pos_ratio,
+                                        device=device,
+                                        timing=timing,
+                                        scheduler=None)
         
         test_dict = SSD_test_step(model=model,
                                   dataloader=test_dataloader,
@@ -428,7 +408,7 @@ def SSD_train(model: torch.nn.Module,
                                   device=device,
                                   timing=timing)
         
-        if scheduler is not None:
+        if (scheduler is not None) & (sched_step_w_opt == False):
             scheduler.step(test_dict['testing loss'])
         
         print(f"Epoch: {epoch+past_epochs}  |  mAP: {test_dict['mAP']['map_50']:.4f}  |  Train loc loss: {train_dict['localization loss']:.4f}  |  Train class loss: {train_dict['classification loss']:.4f}  |  Test loc loss: {test_dict['localization loss']:.4f}  |  Test class loss: {test_dict['classification loss']:.4f}")
