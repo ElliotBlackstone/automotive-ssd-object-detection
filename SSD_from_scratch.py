@@ -18,7 +18,11 @@ from collections import OrderedDict
 
 
 class mySSD(nn.Module):
-    def __init__(self, in_channels: int = 3, num_classes: int = 1):
+    def __init__(self,
+                 in_channels: int = 3,
+                 num_classes: int = 1,
+                 variances: Tuple[float, float] = (0.1, 0.2)):
+        
         super(mySSD, self).__init__()
 
         self.in_channels = in_channels
@@ -29,11 +33,13 @@ class mySSD(nn.Module):
         self.img_w = 300
 
         # create priors
-        self.priors = self.create_default_boxes() # size [8732, 4]
+        priors = self.create_default_boxes() # size [8732, 4]
+        self.register_buffer("priors", priors)
+        priors_xyxy = box_convert(priors, in_fmt='cxcywh', out_fmt='xyxy').clamp(0, 1)
+        self.register_buffer("priors_xyxy", priors_xyxy)
 
         # variances
-        self.variance_center = 0.1
-        self.variance_size = 0.2
+        self.variance_center, self.variance_size = variances
 
 
 # image size must be 300x300
@@ -338,7 +344,7 @@ class mySSD(nn.Module):
                 images: torch.Tensor,
                 score_thresh: float = 0.05,
                 nms_thresh: float = 0.5,
-                max_per_img: int = 200,
+                max_per_img: int = 100,
                 class_agnostic: bool = False,
                 pre_loc_all: torch.Tensor | None = None,
                 pre_conf_all: torch.Tensor | None = None,
@@ -371,7 +377,7 @@ class mySSD(nn.Module):
             raise ValueError(f"NMS threshold should be greater than 0 and less than 1, recieved {nms_thresh}.")
         
         self.eval()
-        if (pre_loc_all is not None) & (pre_conf_all is not None):
+        if (pre_loc_all is not None) and (pre_conf_all is not None):
             loc_all = pre_loc_all
             conf_all = pre_conf_all
         else:
@@ -388,8 +394,7 @@ class mySSD(nn.Module):
         H, W = self.img_h, self.img_w
         v_c, v_s = self.variance_center, self.variance_size
         priors = self.priors
-        if priors.device != device:
-            priors = priors.to(device)
+
 
         out: List[Dict[str, object]] = []
 
@@ -464,15 +469,29 @@ class mySSD(nn.Module):
                 #         idx_local = self.iou_nms(sel_boxes[m], sel_scores[m], iou_threshold=nms_thresh)
                 #         kept.append(m.nonzero(as_tuple=True)[0][idx_local])
                 # keep = torch.cat(kept, dim=0)
+                # sort by class label once
+                order = torch.argsort(sel_labels0)
+                boxes  = sel_boxes[order]
+                scores = sel_scores[order]
+                labels = sel_labels0[order]
+
                 kept = []
-                for c in sel_labels0.unique():
-                    idx_c = (sel_labels0 == c).nonzero(as_tuple=True)[0]
+                start = 0
+                while start < labels.numel():
+                    c = labels[start].item()
+                    # find segment for this label
+                    mask = (labels == c)
+                    # get contiguous slice [start_c, end_c) instead of boolean mask repeatedly
+                    idx_c = mask.nonzero(as_tuple=True)[0]
                     if idx_c.numel() == 0:
+                        start = idx_c[-1].item() + 1
                         continue
-                    idx_local = self.iou_nms(sel_boxes[idx_c], sel_scores[idx_c], iou_threshold=nms_thresh)
-                    kept.append(idx_c[idx_local])
+                    local_keep = self.iou_nms(boxes[idx_c], scores[idx_c], iou_threshold=nms_thresh)
+                    kept.append(idx_c[local_keep])
+                    start = idx_c[-1].item() + 1
+
                 keep = torch.cat(kept, dim=0)
-                keep = keep[sel_scores[keep].argsort(descending=True)]
+                keep = keep[scores[keep].argsort(descending=True)]
 
             keep = keep[:max_per_img]
 
@@ -522,28 +541,25 @@ class mySSD(nn.Module):
 
 
 
-    @staticmethod
-    def encode_ssd(gt_boxes_cxcywh: torch.Tensor,          # [G,4] normalized (cx,cy,w,h)
+
+    def encode_ssd(self,
+                   gt_boxes_xyxy: torch.Tensor,          # [G,4] normalized (cx,cy,w,h)
                    gt_labels: torch.Tensor,                # [G]
-                   priors_cxcywh: torch.Tensor,            # [P,4] normalized (cx,cy,w,h)
                    iou_thresh: float = 0.5,
-                   variances: Tuple[float, float] = (0.1, 0.2),
-                   background_class: int = 0
+                   background_class: int = 0,
                    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Inputs
-        gt_boxes_cxcywh: Ground truth (GT) bounding boxes tensor in 'cxcywh' format
+        gt_boxes_xyxy: Ground truth (GT) bounding boxes tensor in 'xyxy' format
         gt_labels: Tensor containing labels (0, 1, ..., C-2, where C is the total
                    number of classes, including background) corresponding to GT boxes
-        priors_cxcywh: Tensor of shape [P, 4] containing all priors in 'cxcywh' format
-        variances:
         background_class: integer denoting background class, must be 0
 
         Returns:
         loc_target: [P,4] (tx,ty,tw,th) per prior (positives encoded, negatives filled too)
         cls_target: [P]   background for negatives, matched GT label for positives
         pos_mask:   [P]   boolean positives
-        matched_gt_xyxy: [P,4] GT boxes matched to each prior (xyxy, normalized)
+        matched_gt_cxcywh: [P,4] GT boxes matched to each prior (cxcywh, normalized)
         (P is the number of priors, 8732)
         """
 
@@ -551,11 +567,12 @@ class mySSD(nn.Module):
         if background_class != 0:
             raise ValueError(f"Background should be 0, recieved {background_class}.")
         
+        priors_cxcywh = self.priors
+        priors_xyxy   = self.priors_xyxy
         device = priors_cxcywh.device
         dtype  = priors_cxcywh.dtype
-        priors_cxcywh = priors_cxcywh.to(device=device, dtype=dtype)
 
-        G = gt_boxes_cxcywh.shape[0]
+        G = gt_boxes_xyxy.shape[0]
         P = priors_cxcywh.shape[0]
 
         # Edge case: no GT in the image
@@ -566,10 +583,10 @@ class mySSD(nn.Module):
             matched_gt_cxcywh = torch.zeros((P, 4), dtype=dtype, device=device)
             return loc_target, cls_target, pos_mask, matched_gt_cxcywh
 
-        # Convert GT to xyxy for IoU
-        gt_boxes_cxcywh = gt_boxes_cxcywh.to(device=device, dtype=dtype)
-        gt_boxes_xyxy   = box_convert(boxes=gt_boxes_cxcywh, in_fmt='cxcywh', out_fmt='xyxy').clamp(0, 1)
-        priors_xyxy     = box_convert(boxes=priors_cxcywh, in_fmt='cxcywh', out_fmt='xyxy').clamp(0, 1)
+        # Convert GT to cxcywh for IoU
+        
+        # gt_boxes_xyxy   = box_convert(boxes=gt_boxes_cxcywh, in_fmt='cxcywh', out_fmt='xyxy').clamp(0, 1)
+        # priors_xyxy     = box_convert(boxes=priors_cxcywh, in_fmt='cxcywh', out_fmt='xyxy').clamp(0, 1)
 
         # IoU and matching
         iou = complete_box_iou(priors_xyxy, gt_boxes_xyxy)           # [P,G]
@@ -582,21 +599,21 @@ class mySSD(nn.Module):
         pos_mask = best_iou_per_prior >= iou_thresh
 
         # matched_gt_xyxy  = gt_boxes_xyxy[best_gt_per_prior]  # [P,4]
+        gt_boxes_cxcywh = box_convert(boxes=gt_boxes_xyxy, in_fmt='xyxy', out_fmt='cxcywh')
         matched_gt_cxcywh = gt_boxes_cxcywh[best_gt_per_prior]  # [P,4]
 
         # Encode offsets (inverse of SSD decode)
-        v_c, v_s = variances
+        v_c, v_s = self.variance_center, self.variance_size
         t_xy = (matched_gt_cxcywh[:, :2] - priors_cxcywh[:, :2]) / priors_cxcywh[:, 2:] / v_c
         t_wh = torch.log(
             (matched_gt_cxcywh[:, 2:] / priors_cxcywh[:, 2:]).clamp(min=1e-12)
         ) / v_s
 
-        loc_target = torch.zeros_like(priors_cxcywh)
+        loc_target = torch.empty_like(priors_cxcywh)
         loc_target[:, :2] = t_xy
         loc_target[:, 2:] = t_wh
 
         # Class targets
-        gt_labels = gt_labels.to(device=device)
         matched_labels = gt_labels[best_gt_per_prior]        # [P]
         cls_target = torch.full((P,), background_class, dtype=matched_labels.dtype, device=device)
         cls_target[pos_mask] = matched_labels[pos_mask] + 1  # shift by 1 because 0 is reserved for 'background'

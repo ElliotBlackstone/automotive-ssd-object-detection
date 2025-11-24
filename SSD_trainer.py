@@ -107,12 +107,11 @@ def SSD_train_step(model: mySSD,
         if timing:
             t0_build_tar = time.perf_counter()
         
-        pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=model.priors,
+        pos_mask, loc_t_pm, cls_t = build_targets(model=model,
                                                   targets=targets,
                                                   H=images.shape[-2],
                                                   W=images.shape[-1],
                                                   iou_thresh=iou_thresh,
-                                                  variances=(model.variance_center, model. variance_size),
                                                   device=device)
         
         if timing:
@@ -179,7 +178,7 @@ def SSD_test_step(model: mySSD,
                   neg_pos_ratio: float = 3.0,
                   score_thresh: float = 0.05,
                   nms_thresh: float = 0.5,
-                  max_detections_per_img: int = 200,
+                  max_detections_per_img: int = 100,
                   device: str = 'cpu',
                   timing: bool = False,
                   ):
@@ -212,6 +211,7 @@ def SSD_test_step(model: mySSD,
     batch_count = 0
     time_pred = 0
     time_mAP = 0
+    time_build_tar = 0
 
     map_metric = MeanAveragePrecision(box_format='xyxy', iou_type='bbox', iou_thresholds=[0.50], class_metrics=True).to(device)
     map_metric.reset()
@@ -228,13 +228,19 @@ def SSD_test_step(model: mySSD,
             loc_all, conf_all = model(images)
 
             # ---------- Build targets (same as train) ----------
-            pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=model.priors,
+            if timing:
+                t0_build_tar = time.perf_counter()
+
+            pos_mask, loc_t_pm, cls_t = build_targets(model=model,
                                                       targets=targets,
                                                       H=images.shape[-2],
                                                       W=images.shape[-1],
                                                       iou_thresh=iou_thresh,
-                                                      variances=(model.variance_center, model.variance_size),
                                                       device=device)
+            
+            if timing:
+                t1_build_tar = time.perf_counter()
+                time_build_tar += t1_build_tar - t0_build_tar
         
             # number of positives per image (avoid zero division)
             num_pos_per_img = pos_mask.sum(dim=1)                    # [N]
@@ -293,7 +299,8 @@ def SSD_test_step(model: mySSD,
         time_mAP += t1_mAP - t0_mAP
 
     time_dict = {"model prediction": time_pred/batch_count,
-                 "mAP time": time_mAP}
+                 "mAP time": time_mAP,
+                 "build targets": time_build_tar/batch_count,}
 
     return {"testing loss": test_loss, "localization loss": loc_loss, "classification loss": conf_loss, "mAP": mAP, "timing": time_dict} #, outputs
 
@@ -311,7 +318,7 @@ def SSD_train(model: torch.nn.Module,
               neg_pos_ratio: float = 3.0,
               score_thresh: float = 0.05,
               nms_thresh: float = 0.5,
-              max_detections_per_img: int = 200,
+              max_detections_per_img: int = 100,
               epochs: int = 5,
               early_stopping_rounds: int | None = None,
               device: str = 'cpu',
@@ -428,6 +435,19 @@ def SSD_train(model: torch.nn.Module,
                     if conseq_rounds >= early_stopping_rounds:
                         print(f"Early stopping after {early_stopping_rounds} rounds without improvement.")
                         results["epochs"][0] = epoch + past_epochs
+                        if save_model:
+                            loss_dict = (merge_dicts_preserve_order(past_train_dict, results)
+                            if past_train_dict is not None else results)
+                            save_checkpoint(epoch=epoch + past_epochs + 1,  # choose 1-based consistently
+                                model=model,
+                                loss_dict=loss_dict,
+                                optimizer=optimizer,
+                                scheduler=scheduler,
+                                scaler=None,
+                                best_metric=val_err,   # metric at this epoch
+                                outdir=SAVE_DIR,
+                                tag="last",)
+
                         break
 
         # if early_stopping_rounds != None:
@@ -558,22 +578,19 @@ def SSD_train(model: torch.nn.Module,
 
 
 
-def build_targets(priors_cxcywh: torch.Tensor,
+def build_targets(model: mySSD,
                   targets: List[Dict],
                   H: int = 300,
                   W: int = 300,
                   iou_thresh: float = 0.50,
-                  variances: Tuple[float, float] = (0.1, 0.2),
                   device: str = 'cpu',
                   ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Inputs
-    priors_cxcywh: Tensor of size [P, 4] in 'cxcywh' format, priors
     targets: List of length B, where each element is a dictionary containing keys 'boxes', 'labels'
     H: Integer, should be 300
     W: Integer, should be 300
     iou_thresh: Float between 0 and 1 denoting the IoU threshold
-    variances: Tuple containing two positive floats
     device: String, should be 'cpu' or 'cuda'
 
     Output
@@ -600,15 +617,15 @@ def build_targets(priors_cxcywh: torch.Tensor,
         gt_xyxy_px = targets[i]['boxes']
         gt_labels  = targets[i]['labels']
         if gt_xyxy_px.numel() == 0:
-            gt_cxcywh = gt_xyxy_px.new_zeros((0,4))
+            gt_xyxy = gt_xyxy_px.new_zeros((0,4))
         else:
             gt_xyxy = gt_xyxy_px / norm
-            gt_cxcywh = box_convert(gt_xyxy, in_fmt='xyxy', out_fmt='cxcywh')
+            # gt_cxcywh = box_convert(gt_xyxy, in_fmt='xyxy', out_fmt='cxcywh')
 
-        loc_t, cls_t, pos_mask, _ = mySSD.encode_ssd(
-            gt_cxcywh, gt_labels, priors_cxcywh,
-            iou_thresh=iou_thresh, variances=variances, background_class=0
-        )
+        loc_t, cls_t, pos_mask, _ = model.encode_ssd(gt_boxes_xyxy=gt_xyxy,
+                                                     gt_labels=gt_labels,
+                                                     iou_thresh=iou_thresh,
+                                                     background_class=0)
         # shapes: [P,4], [P], [P]
         loc_t_list.append(loc_t)
         cls_t_list.append(cls_t)
