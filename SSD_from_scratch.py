@@ -522,22 +522,22 @@ class mySSD(nn.Module):
         if boxes.numel() == 0:
             return boxes.new_zeros((0,), dtype=torch.long)
 
-        order = scores.argsort(descending=True)
+        order = scores.argsort(descending=True)  # [N]
         keep = []
 
         while order.numel() > 0:
-            i = order[0].item()
+            i = order[0]
             keep.append(i)
             if order.numel() == 1:
                 break
             rest = order[1:]
 
             # pairwise CIoU between the top-1 box and the remaining boxes
-            iou = complete_box_iou(boxes[i].unsqueeze(0), boxes[rest]).squeeze(0)
+            iou_vals = complete_box_iou(boxes[i].unsqueeze(0), boxes[rest]).squeeze(0)
             # suppress boxes "too similar & close" to the current top box
-            order = rest[iou <= iou_threshold]
+            order = rest[iou_vals <= iou_threshold]
 
-        return torch.tensor(keep, device=boxes.device, dtype=torch.long)
+        return torch.stack(keep)
 
 
 

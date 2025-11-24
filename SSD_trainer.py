@@ -133,8 +133,7 @@ def SSD_train_step(model: mySSD,
                                               pos_mask=pos_mask,
                                               num_pos_per_img=num_pos_per_img,
                                               total_pos=total_pos,
-                                              neg_pos_ratio=neg_pos_ratio,
-                                              device=device)
+                                              neg_pos_ratio=neg_pos_ratio)
 
         # loss
         batch_loss = batch_loc_loss + batch_conf_loss
@@ -256,8 +255,7 @@ def SSD_test_step(model: mySSD,
                                                   pos_mask=pos_mask,
                                                   num_pos_per_img=num_pos_per_img,
                                                   total_pos=total_pos,
-                                                  neg_pos_ratio=neg_pos_ratio,
-                                                  device=device)
+                                                  neg_pos_ratio=neg_pos_ratio)
             
             batch_total_loss = batch_loc_loss + batch_conf_loss
 
@@ -644,8 +642,7 @@ def CELoss_w_neg_mining(conf_all: torch.Tensor,
                         pos_mask: torch.Tensor,
                         num_pos_per_img: torch.Tensor,
                         total_pos: int,
-                        neg_pos_ratio: float = 3.0,
-                        device: str = 'cpu',) -> torch.Tensor:
+                        neg_pos_ratio: float = 3.0,) -> torch.Tensor:
     """
     Inputs
     conf_all: Tensor of size [B, P, C] containing class logits for each prior
@@ -653,10 +650,9 @@ def CELoss_w_neg_mining(conf_all: torch.Tensor,
            with 0 corresponding to 'background'
     pos_mask: Boolean tensor of size [B, P] denoting priors boxes that have
               sufficient overlap with GT boxes
-    num_pos_per_img: Tensor of size [B] denoting number of positive priors per image, min 1
-    total_pos: Integer, sum of num_pos_per_img
+    num_pos_per_img: Tensor of size [B] denoting number of positive priors per image
+    total_pos: Integer, sum of num_pos_per_img, at minimum 1
     neg_pos_ratio: Float, positive number giving the ratio of negative to positive priors
-    device: String, 'cpu' or 'cuda'
 
     Output
     Float; cross entropy loss with hard negative mining
@@ -664,14 +660,15 @@ def CELoss_w_neg_mining(conf_all: torch.Tensor,
     """
     # cross-entropy per prior (no reduction)
     B, P, C = conf_all.shape     # B - batch size, P - number of priors (8732), C - number of classes
+    device = conf_all.device
+
     ce = torch.nn.functional.cross_entropy(conf_all.view(-1, C), cls_t.view(-1), reduction='none').view(B, P)  # [B, P]
 
     # keep CE on positives always
-    # pos_mask.float() turns true/false into 1/0
-    ce_pos = (ce * pos_mask.float()).sum()
+    ce_pos = ce[pos_mask].sum()
 
     # select hardest negatives per image at ratio R:1 w.r.t positives
-    ce_neg_sum = torch.tensor(0.0, device=device)
+    ce_neg_sum = torch.zeros((), device=device)
     for i in range(B):
         n_pos = int(num_pos_per_img[i].item())
         if n_pos == 0:
@@ -1129,7 +1126,7 @@ class ConditionalIoUCrop(torch.nn.Module):
     def __init__(
         self,
         *,
-        min_area_frac: float = 0.002,         # threshold separating "has big box" vs "all small"
+        min_area_frac: float = 0.02,         # threshold separating "has big box" vs "all small"
         small_min_scale: float = 0.3,         # more aggressive zoom-in for small-only images
         large_min_scale: float = 0.6,
         max_scale: float = 1.0,
@@ -1186,13 +1183,12 @@ class ConditionalIoUCrop(torch.nn.Module):
 
 
 
-def get_cosine_schedule_with_warmup(
-    optimizer: torch.optim.Optimizer,
-    num_warmup_steps: int,
-    num_training_steps: int,
-    min_lr: float = 0.0,
-    last_epoch: int = -1,
-) -> torch.optim.lr_scheduler.LambdaLR:
+def get_cosine_schedule_with_warmup(optimizer: torch.optim.Optimizer,
+                                    num_warmup_steps: int,
+                                    num_training_steps: int,
+                                    min_lr: float = 0.0,
+                                    last_epoch: int = -1,
+                                    ) -> torch.optim.lr_scheduler.LambdaLR:
     """
     Cosine decay with linear warmup.
 
@@ -1273,16 +1269,14 @@ def get_cosine_schedule_with_warmup(
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=last_epoch)
 
 
-def build_optimizer_and_scheduler(
-    model: torch.nn.Module,
-    train_dataloader: torch.utils.data.DataLoader,
-    max_epochs: int = 120,
-    warmup_epochs: int = 5,
-    base_lr: float = 3e-3,
-    min_lr: float = 1e-5,
-    momentum: float = 0.9,
-    weight_decay: float = 5e-4,
-):
+def build_optimizer_and_scheduler(model: torch.nn.Module,
+                                  train_dataloader: torch.utils.data.DataLoader,
+                                  max_epochs: int = 120,
+                                  warmup_epochs: int = 5,
+                                  base_lr: float = 3e-3,
+                                  min_lr: float = 1e-5,
+                                  momentum: float = 0.9,
+                                  weight_decay: float = 5e-4):
     """
     Create SGD optimizer and cosine-with-warmup scheduler
     for an SSD-style detector.
