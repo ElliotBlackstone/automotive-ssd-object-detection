@@ -469,29 +469,43 @@ class mySSD(nn.Module):
                 #         idx_local = self.iou_nms(sel_boxes[m], sel_scores[m], iou_threshold=nms_thresh)
                 #         kept.append(m.nonzero(as_tuple=True)[0][idx_local])
                 # keep = torch.cat(kept, dim=0)
-                # sort by class label once
+                # # sort by class label once
+                # order = torch.argsort(sel_labels0)
+                # boxes  = sel_boxes[order]
+                # scores = sel_scores[order]
+                # labels = sel_labels0[order]
+
+
+
+                # keep = torch.cat(kept, dim=0)
+                # keep = keep[scores[keep].argsort(descending=True)]
+
+                # sort once
                 order = torch.argsort(sel_labels0)
                 boxes  = sel_boxes[order]
                 scores = sel_scores[order]
                 labels = sel_labels0[order]
 
                 kept = []
-                start = 0
-                while start < labels.numel():
-                    c = labels[start].item()
-                    # find segment for this label
-                    mask = (labels == c)
-                    # get contiguous slice [start_c, end_c) instead of boolean mask repeatedly
-                    idx_c = mask.nonzero(as_tuple=True)[0]
-                    if idx_c.numel() == 0:
-                        start = idx_c[-1].item() + 1
-                        continue
-                    local_keep = self.iou_nms(boxes[idx_c], scores[idx_c], iou_threshold=nms_thresh)
-                    kept.append(idx_c[local_keep])
-                    start = idx_c[-1].item() + 1
+                i = 0
+                N = labels.numel()
+                while i < N:
+                    c = labels[i].item()
+
+                    # find the contiguous block [i, j) where labels == c
+                    j = i + 1
+                    while j < N and labels[j].item() == c:
+                        j += 1
+
+                    # NMS on boxes[i:j]
+                    local_keep = self.iou_nms(boxes[i:j], scores[i:j], iou_threshold=nms_thresh)
+                    kept.append(torch.arange(i, j, device=boxes.device)[local_keep])
+
+                    i = j
 
                 keep = torch.cat(kept, dim=0)
-                keep = keep[scores[keep].argsort(descending=True)]
+                keep = order[keep]  # map back to indices in sel_* space
+                keep = keep[sel_scores[keep].argsort(descending=True)]
 
             keep = keep[:max_per_img]
 
@@ -500,11 +514,9 @@ class mySSD(nn.Module):
             scores_out = sel_scores[keep]                                        # Tensor
             boxes_out  = sel_boxes[keep]                                         # Tensor[K,4]
 
-            out.append({
-                "labels": labels_out,
-                "scores": scores_out,
-                "boxes": boxes_out
-            })
+            out.append({"labels": labels_out,
+                        "scores": scores_out,
+                        "boxes": boxes_out})
 
         return out
 
@@ -532,8 +544,8 @@ class mySSD(nn.Module):
                 break
             rest = order[1:]
 
-            # pairwise CIoU between the top-1 box and the remaining boxes
-            iou_vals = complete_box_iou(boxes[i].unsqueeze(0), boxes[rest]).squeeze(0)
+            # pairwise DIoU between the top-1 box and the remaining boxes
+            iou_vals = distance_box_iou(boxes[i].unsqueeze(0), boxes[rest]).squeeze(0)
             # suppress boxes "too similar & close" to the current top box
             order = rest[iou_vals <= iou_threshold]
 

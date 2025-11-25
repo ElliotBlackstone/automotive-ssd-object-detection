@@ -222,11 +222,11 @@ class ImageClass(Dataset):
 
     def show_with_box(self,
                       index: int,
-                      color: str = "r",
+                      color: str = "g",
                       lw: int = 2,
                       label: bool = False,
                       pred_dict: Dict | None = None,
-                      pred_color: str = "g",
+                      pred_color: str = "r",
                       lw_pred: int = 2,
                       pred_label: bool = False,
                       pred_ref: Literal["size", "normalized", "current"] = "size",
@@ -303,6 +303,7 @@ class ImageClass(Dataset):
         # ----- draw GT boxes (assumed already in image pixel coords) -----
         gt_boxes = _to_np_xyxy(target["boxes"])
         gt_labels = target.get("labels", None)
+        label_dict = self.class_to_idx
 
         for i in range(gt_boxes.shape[0]):
             x_min, y_min, x_max, y_max = gt_boxes[i]
@@ -322,7 +323,6 @@ class ImageClass(Dataset):
             )
             ax.add_patch(rect)
 
-            label_dict = self.class_to_idx
             if label and gt_labels is not None:
                 # your mapping; convert tensor→int safely
                 lab_val = gt_labels[i].item() if isinstance(gt_labels[i], torch.Tensor) else int(gt_labels[i])
