@@ -420,41 +420,18 @@ class mySSD(nn.Module):
             priors_sel = priors[pri_idx]      # [M,4] priors for kept priors
 
             # decode only these M priors to normalized cxcywh
-            boxes_cxcywh = self.decode_ssd(loc=loc_sel,
-                                           priors=priors_sel,
-                                           variances=(v_c, v_s))  # [M,4]
+            boxes_cxcywh = self.decode_ssd(loc=loc_sel, priors=priors_sel, variances=(v_c, v_s))  # [M,4]
 
-            # decode to normalized cxcywh
-            # boxes_cxcywh = self.decode_ssd(loc_all[b], priors, variances=(v_c, v_s))  # (P,4)
-            # cxcywh -> pixel xyxy + clamp
             cx, cy, w, h = boxes_cxcywh.unbind(dim=1)
             x1 = (cx - 0.5 * w).clamp(0, 1) * W
             y1 = (cy - 0.5 * h).clamp(0, 1) * H
             x2 = (cx + 0.5 * w).clamp(0, 1) * W
             y2 = (cy + 0.5 * h).clamp(0, 1) * H
-            # boxes_xyxy = torch.stack([x1, y1, x2, y2], dim=1)                     # (P,4)
-
             sel_boxes = torch.stack([x1, y1, x2, y2], dim=1)  # [M,4]
 
             # scores / labels for these kept (prior, class) pairs
             sel_scores  = b_scores[pri_idx, cls0_idx]  # [M]
             sel_labels0 = cls0_idx                     # [M], 0-based foreground labels
-
-            # b_scores = scores_all[b]                                              # (P,num_fg)
-            # keep_mask = b_scores > score_thresh                                   # (P,num_fg)
-
-            # if not keep_mask.any():
-            #     out.append({
-            #         "labels": torch.empty(0, dtype=torch.int64, device=device),
-            #         "scores": torch.empty(0, dtype=torch.float32, device=device),
-            #         "boxes": boxes_xyxy.new_zeros((0, 4))
-            #     })
-            #     continue
-
-            # pri_idx, cls0_idx = keep_mask.nonzero(as_tuple=True)                   # 0-based class ids
-            # sel_boxes  = boxes_xyxy[pri_idx]                                       # (M,4)
-            # sel_scores = b_scores[pri_idx, cls0_idx]                               # (M,)
-            # sel_labels0 = cls0_idx                                                 # (M,)
 
             # NMS
             if class_agnostic:
@@ -462,24 +439,6 @@ class mySSD(nn.Module):
                 # ensure highest-score first before truncation
                 keep = keep[sel_scores[keep].argsort(descending=True)]
             else:
-                # kept = []
-                # for c in sel_labels0.unique():
-                #     m = (sel_labels0 == c)
-                #     if m.any():
-                #         idx_local = self.iou_nms(sel_boxes[m], sel_scores[m], iou_threshold=nms_thresh)
-                #         kept.append(m.nonzero(as_tuple=True)[0][idx_local])
-                # keep = torch.cat(kept, dim=0)
-                # # sort by class label once
-                # order = torch.argsort(sel_labels0)
-                # boxes  = sel_boxes[order]
-                # scores = sel_scores[order]
-                # labels = sel_labels0[order]
-
-
-
-                # keep = torch.cat(kept, dim=0)
-                # keep = keep[scores[keep].argsort(descending=True)]
-
                 # sort once
                 order = torch.argsort(sel_labels0)
                 boxes  = sel_boxes[order]

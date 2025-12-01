@@ -123,7 +123,6 @@ def SSD_train_step(model: mySSD,
         total_pos = num_pos_per_img.sum().clamp_min(1).float()   # scalar
 
         # -------- 2) Localization loss (positives only) --------
-        # SmoothL1 on offsets (no decode), sum then normalize by #pos
         batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction='sum') / total_pos
 
 
@@ -249,7 +248,7 @@ def SSD_test_step(model: mySSD,
             # Localization: SmoothL1 on positives only
             batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
 
-            # Classification: cross-entropy with hard-negative mining (same as train)
+            # Classification: cross-entropy with hard-negative mining
             batch_conf_loss = CELoss_w_neg_mining(conf_all=conf_all,
                                                   cls_t=cls_t,
                                                   pos_mask=pos_mask,
@@ -418,7 +417,6 @@ def SSD_train(model: torch.nn.Module,
 
         # Early stopping rounds
         if early_stopping_rounds is not None:
-            # choose a metric: either test_dict["testing loss"] or -test_dict["mAP"]["map_50"]
             val_metric = test_dict["mAP"]["map_50"]
 
             if epoch == 0:
@@ -434,85 +432,18 @@ def SSD_train(model: torch.nn.Module,
                         print(f"Early stopping after {early_stopping_rounds} rounds without improvement.")
                         results["epochs"][0] = epoch + past_epochs
                         if save_model:
-                            loss_dict = (merge_dicts_preserve_order(past_train_dict, results)
-                            if past_train_dict is not None else results)
-                            save_checkpoint(epoch=epoch + past_epochs + 1,  # choose 1-based consistently
-                                model=model,
-                                loss_dict=loss_dict,
-                                optimizer=optimizer,
-                                scheduler=scheduler,
-                                scaler=None,
-                                best_metric=val_err,   # metric at this epoch
-                                outdir=SAVE_DIR,
-                                tag="last",)
+                            loss_dict = (merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results)
+                            save_checkpoint(epoch=epoch + past_epochs + 1,
+                                            model=model,
+                                            loss_dict=loss_dict,
+                                            optimizer=optimizer,
+                                            scheduler=scheduler,
+                                            scaler=None,
+                                            best_metric=val_err,
+                                            outdir=SAVE_DIR,
+                                            tag="last",)
 
                         break
-
-        # if early_stopping_rounds != None:
-        #     # if/else statement to monitor consequtive rounds of error
-        #     # initialize error
-        #     if epoch == 0:
-        #         best_error_loc = test_dict['localization loss']
-        #         best_error_conf = test_dict['classification loss']
-            
-        #     # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
-        #     if best_error_loc >= test_dict['localization loss']:
-        #         best_error_loc = test_dict['localization loss']
-        #         conseq_rounds_loc = 0
-        #     # if test loss is going up, best_error stays the same and conseq_rounds counter goes up
-        #     else:
-        #         conseq_rounds_loc += 1
-                
-        #         if conseq_rounds_loc >= early_stopping_rounds:
-        #             print(f"Early stopping rounds ({early_stopping_rounds}) reached. (localization)")
-        #             results['epochs'][0] = epoch+past_epochs
-        #             break
-            
-        #     # if test loss is going down, best_error becomes test_loss and conseq_rounds resets to 0
-        #     if best_error_conf >= test_dict['classification loss']:
-        #         best_error_conf = test_dict['classification loss']
-        #         conseq_rounds_conf = 0
-        #     # if test loss is going up, best_error stays the same and conseq_rounds counter goes up
-        #     else:
-        #         conseq_rounds_conf += 1
-                
-        #         if conseq_rounds_conf >= early_stopping_rounds:
-        #             print(f"Early stopping rounds ({early_stopping_rounds}) reached. (classification)")
-        #             results['epochs'][0] = epoch+past_epochs
-        #             break
-        
-
-        
-
-        # Saving the model
-        # if save_model == True:
-
-        #     if SAVE_DIR is None:
-        #         raise TypeError("If the model is to be saved, SAVE_DIR must be specified.")
-            
-        #     # initialize best error
-        #     val_err = test_dict['testing loss']
-        #     if epoch == 0:
-        #         best_err = val_err
-            
-        #     loss_dict = merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results
-            
-        #     # save a rolling "last"
-        #     if epoch_save_interval is None:
-        #         save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
-        #                         best_metric=best_err, outdir=SAVE_DIR, tag="last")
-
-        #     # save every epoch_save_interval epochs
-        #     if epoch_save_interval is not None:
-        #         if (epoch + 1) % epoch_save_interval == 0:
-        #             save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
-        #                             best_metric=best_err, outdir=SAVE_DIR, tag=f"epoch_{epoch+past_epochs+1:03d}")
-
-        #     # keep a separate "best" snapshot
-        #     if (save_best_model == True) & (val_err < best_err):
-        #         best_err = val_err
-        #         save_checkpoint(epoch=epoch+past_epochs, model=model, loss_dict=loss_dict, optimizer=optimizer, scheduler=scheduler, scaler=None,
-        #                         best_metric=best_err, outdir=SAVE_DIR, tag="best")
                 
         if save_model:
             val_err = test_dict["testing loss"]
@@ -528,8 +459,7 @@ def SSD_train(model: torch.nn.Module,
             will_save_best   = (save_best_model and (val_err < best_err))
 
             if will_save_last or will_save_period or will_save_best:
-                loss_dict = (merge_dicts_preserve_order(past_train_dict, results)
-                            if past_train_dict is not None else results)
+                loss_dict = (merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results)
 
             # rolling "last" snapshot
             if will_save_last:
@@ -618,16 +548,15 @@ def build_targets(model: mySSD,
             gt_xyxy = gt_xyxy_px.new_zeros((0,4))
         else:
             gt_xyxy = gt_xyxy_px / norm
-            # gt_cxcywh = box_convert(gt_xyxy, in_fmt='xyxy', out_fmt='cxcywh')
 
         loc_t, cls_t, pos_mask, _ = model.encode_ssd(gt_boxes_xyxy=gt_xyxy,
                                                      gt_labels=gt_labels,
                                                      iou_thresh=iou_thresh,
                                                      background_class=0)
-        # shapes: [P,4], [P], [P]
-        loc_t_list.append(loc_t)
-        cls_t_list.append(cls_t)
-        pos_mask_lst.append(pos_mask)
+
+        loc_t_list.append(loc_t)        # [P, 4]
+        cls_t_list.append(cls_t)        # [P]
+        pos_mask_lst.append(pos_mask)   # [P]
 
     loc_t   = torch.stack(loc_t_list, dim=0).to(device)      # [B,P,4]   B = len(targets) aka batch size
     cls_t   = torch.stack(cls_t_list, dim=0).to(device)      # [B,P]
@@ -642,7 +571,8 @@ def CELoss_w_neg_mining(conf_all: torch.Tensor,
                         pos_mask: torch.Tensor,
                         num_pos_per_img: torch.Tensor,
                         total_pos: int,
-                        neg_pos_ratio: float = 3.0,) -> torch.Tensor:
+                        neg_pos_ratio: float = 3.0,
+                        ) -> torch.Tensor:
     """
     Inputs
     conf_all: Tensor of size [B, P, C] containing class logits for each prior
@@ -902,51 +832,6 @@ def collate_detection(batch):
 
 
 
-
-# def collate_detection(batch):
-#     imgs, tgts = [], []
-#     for sample in batch:
-#         if isinstance(sample, dict):
-#             img = sample["image"]
-#             tgt = sample
-#         else:
-#             img, tgt = sample
-
-#         # assume dataset already produced float32 CxHxW tensors
-#         # avoid redundant copies; only enforce contiguous when stacking
-#         assert torch.is_tensor(img) and img.ndim == 3 and img.size(0) in (1,3)
-#         imgs.append(img)
-
-#         b = tgt.get("boxes", None)
-#         l = tgt.get("labels", None)
-
-#         if isinstance(b, TVBoxes):
-#             b = b.as_subclass(torch.Tensor)  # cheap view, keeps dtype/stride
-#         if b is None:
-#             b = torch.zeros((0,4), dtype=torch.float32)
-#         else:
-#             b = b.to(dtype=torch.float32)
-#             b = b.view(-1, 4)  # no-op if already [G,4]
-
-#         if l is None:
-#             l = torch.zeros((0,), dtype=torch.long)
-#         else:
-#             l = l.to(dtype=torch.long).view(-1)
-
-#         # minimal target dict
-#         tgts.append({
-#             "boxes": b.contiguous(),          # keep contiguous small tensors
-#             "labels": l.contiguous(),
-#             # include only what your loss needs; if you need ids:
-#             "image_id": tgt.get("image_id", None),
-#             # add iscrowd/area if your loss needs them; avoid unnecessary keys
-#         })
-
-#     # one contiguous copy here is fine
-#     return torch.stack([im.contiguous() for im in imgs], 0), tgts
-
-
-
 def merge_dicts_preserve_order(d1: dict, d2: dict) -> dict:
     """
     Merge two dictionaries with identical keys while preserving order.
@@ -963,7 +848,6 @@ def merge_dicts_preserve_order(d1: dict, d2: dict) -> dict:
     merge_dicts_preserve_order(d1, d2) -> {"a": [1, 2, 3, "alpha"], "b": ["python", 8, 2]}
     merge_dicts_preserve_order(d2, d1) -> {"a": [3, "alpha", 1, 2], "b": [2, "python", 8]}
     """
-    # sanity: same keys and key order from d1 is kept
     if set(d1.keys()) != set(d2.keys()):
         raise KeyError("Dicts must have identical key sets.")
 
@@ -990,7 +874,7 @@ def merge_dicts_preserve_order(d1: dict, d2: dict) -> dict:
                 out[k] = type(v1)(seq) if type(v1) is type(v2) else seq
             continue
 
-        # sets are unordered; if you truly want deterministic order, convert:
+        # sets are unordered
         if isinstance(v1, set) and isinstance(v2, set):
             out[k] = list(v1) + [x for x in v2 if x not in v1]  # insertion-style, no dups
             continue
@@ -1002,28 +886,6 @@ def merge_dicts_preserve_order(d1: dict, d2: dict) -> dict:
 
 
 
-
-# class ConditionalIoUCrop(torch.nn.Module):
-#     def __init__(self, *, min_area_frac=0.002, **iou_kwargs):
-#         super().__init__()
-#         self.min_area_frac = float(min_area_frac)
-#         self.iou_crop = v2.RandomIoUCrop(**iou_kwargs)
-
-#     @torch.no_grad()
-#     def forward(self, img, target):
-#         # img: Tensor/Image[C,H,W]; target: dict with "boxes"
-#         H, W = img.shape[-2], img.shape[-1]
-#         boxes = target.get("boxes", None)
-#         if boxes is None or boxes.numel() == 0:
-#             return img, target
-
-#         b = torch.as_tensor(boxes)
-#         area = (b[:, 2] - b[:, 0]).clamp(min=0) * (b[:, 3] - b[:, 1]).clamp(min=0)
-#         if (area >= self.min_area_frac * (H * W)).any():
-#             return self.iou_crop(img, target)   # try crop
-#         else:
-#             return img, target                  # skip (all boxes too small)
-        
 
 class ConditionalIoUCrop(torch.nn.Module):
     """
@@ -1126,7 +988,7 @@ class ConditionalIoUCrop(torch.nn.Module):
     def __init__(
         self,
         *,
-        min_area_frac: float = 0.02,         # threshold separating "has big box" vs "all small"
+        min_area_frac: float = 0.02,          # threshold separating "has big box" vs "all small"
         small_min_scale: float = 0.3,         # more aggressive zoom-in for small-only images
         large_min_scale: float = 0.6,
         max_scale: float = 1.0,
