@@ -1,9 +1,11 @@
 import torch
 from torch import nn
 from torchvision.ops import box_convert, box_iou, distance_box_iou, complete_box_iou
+import torchvision.transforms.v2 as v2
+
 
 import pathlib
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from typing import Tuple, Dict, List
 import pandas as pd
 import numpy as np
@@ -19,14 +21,16 @@ from collections import OrderedDict
 
 class mySSD(nn.Module):
     def __init__(self,
+                 class_to_idx_dict: Dict,
                  in_channels: int = 3,
-                 num_classes: int = 1,
                  variances: Tuple[float, float] = (0.1, 0.2)):
         
         super(mySSD, self).__init__()
 
         self.in_channels = in_channels
-        self.num_classes = num_classes
+        self.class_to_idx = class_to_idx_dict
+        self.idx_to_class = {v: k for k, v in class_to_idx_dict.items()}
+        self.num_classes = len(class_to_idx_dict) + 1 # add 1 for background
 
         # image size should be 300x300
         self.img_h = 300
@@ -224,12 +228,12 @@ class mySSD(nn.Module):
         ])
 
         self.cls_head = nn.ModuleList([
-            nn.Conv2d(512, 4 * num_classes, kernel_size=3, padding=1),  # applied to VGG16_UpTo_conv4_3 - output size: (B, 4*num_classes, 38, 38)
-            nn.Conv2d(1024, 6 * num_classes, kernel_size=3, padding=1), # applied to extra_conv7        - output size: (B, 6*num_classes, 19, 19)
-            nn.Conv2d(512, 6 * num_classes, kernel_size=3, padding=1),  # applied to extra_conv8_2      - output size: (B, 6*num_classes, 10, 10)
-            nn.Conv2d(256, 6 * num_classes, kernel_size=3, padding=1),  # applied to extra_conv9_2      - output size: (B, 6*num_classes, 5, 5)
-            nn.Conv2d(256, 4 * num_classes, kernel_size=3, padding=1),  # applied to extra_conv10_2     - output size: (B, 4*num_classes, 3, 3)
-            nn.Conv2d(256, 4 * num_classes, kernel_size=3, padding=1)   # applied to extra_conv11_2     - output size: (B, 4*num_classes, 1, 1)
+            nn.Conv2d(512, 4 * self.num_classes, kernel_size=3, padding=1),  # applied to VGG16_UpTo_conv4_3 - output size: (B, 4*num_classes, 38, 38)
+            nn.Conv2d(1024, 6 * self.num_classes, kernel_size=3, padding=1), # applied to extra_conv7        - output size: (B, 6*num_classes, 19, 19)
+            nn.Conv2d(512, 6 * self.num_classes, kernel_size=3, padding=1),  # applied to extra_conv8_2      - output size: (B, 6*num_classes, 10, 10)
+            nn.Conv2d(256, 6 * self.num_classes, kernel_size=3, padding=1),  # applied to extra_conv9_2      - output size: (B, 6*num_classes, 5, 5)
+            nn.Conv2d(256, 4 * self.num_classes, kernel_size=3, padding=1),  # applied to extra_conv10_2     - output size: (B, 4*num_classes, 3, 3)
+            nn.Conv2d(256, 4 * self.num_classes, kernel_size=3, padding=1)   # applied to extra_conv11_2     - output size: (B, 4*num_classes, 1, 1)
         ])
 
         # total detections per class: 4*38*38 + 6*19*19 + 6*10*10 + 6*5*5 + 4*3*3 + 4*1*1 = 8732
@@ -342,7 +346,7 @@ class mySSD(nn.Module):
     @torch.no_grad()
     def predict(self,
                 images: torch.Tensor,
-                score_thresh: float = 0.05,
+                score_thresh: float = 0.2,
                 nms_thresh: float = 0.5,
                 max_per_img: int = 100,
                 class_agnostic: bool = False,
@@ -478,8 +482,148 @@ class mySSD(nn.Module):
                         "boxes": boxes_out})
 
         return out
-
     
+
+
+
+    def show_prediction_side_by_side(self,
+                                     image_path: str,
+                                     score_thresh: float = 0.2,
+                                     nms_thresh: float = 0.5,
+                                     max_per_img: int = 100,
+                                     class_agnostic: bool = False,
+                                     target_width: int = 512,
+                                     target_height: int = 512,
+                                    ) -> Image.Image:
+        """
+        Load an image from disk, run self.predict on it, and return a new image with
+        two panels side by side:
+        - left:  original image (size target_size)
+        - right: same image with predicted bounding boxes + labels + scores
+
+        Parameters
+        ----------
+        self
+            SSD model instance providing a .predict(...) method with the signature
+            given in the prompt.
+        image_path : str
+            Path to the input image file.
+        score_thresh : float, optional (default=0.2)
+            Score threshold passed to self.predict.
+        nms_thresh : float, optional (default=0.5)
+            NMS IoU threshold passed to self.predict.
+        max_per_img : int, optional (default=100)
+            Maximum number of detections per image (passed to self.predict).
+        class_agnostic : bool, optional (default=False)
+            Whether to perform class-agnostic NMS in self.predict.
+
+        Returns
+        -------
+        combined_image : PIL.Image.Image
+            A PIL image of size (H, 2*W). The left half is the original resized
+            image, the right half is the annotated image.
+        """
+
+        device = next(self.parameters()).device
+        class_to_idx = {'biker': 0, 'car': 1, 'pedestrian': 2, 'trafficLight': 3, 'truck': 4}
+        idx_to_class = {v: k for k, v in class_to_idx.items()}
+
+        # -------------------------------------------------------------------------
+        # 1. Load original image
+        # -------------------------------------------------------------------------
+        pil_orig = Image.open(image_path).convert("RGB")
+        pil_orig = ImageOps.exif_transpose(pil_orig)
+
+        # Model input size (must match training)
+        model_size = (300, 300)  # (width, height) for PIL
+
+        # -------------------------------------------------------------------------
+        # 2. Create the PIL image used for prediction and preprocess
+        # -------------------------------------------------------------------------
+        # For prediction and drawing, work in the same 300x300 space
+        pil_for_model = pil_orig.resize(model_size, Image.BILINEAR)
+
+        preprocess = v2.Compose([
+            v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Resize((300, 300), antialias=True),  # (height, width)
+            v2.Normalize(mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225]),
+        ])
+
+        img_tensor = preprocess(pil_for_model)       # [3, 300, 300]
+        img_tensor = img_tensor.unsqueeze(0).to(device)  # [1, 3, 300, 300]
+
+        # -------------------------------------------------------------------------
+        # 3. Run prediction
+        # -------------------------------------------------------------------------
+        preds = self.predict(images=img_tensor,
+                            score_thresh=score_thresh,
+                            nms_thresh=nms_thresh,
+                            max_per_img=max_per_img,
+                            class_agnostic=class_agnostic,
+                            pre_loc_all=None,
+                            pre_conf_all=None)
+
+        pred = preds[0]
+        boxes = pred["boxes"].to("cpu")    # [K,4], xyxy in 300x300 coords
+        labels = pred["labels"].to("cpu")  # [K]
+        scores = pred["scores"].to("cpu")  # [K]
+
+        # -------------------------------------------------------------------------
+        # 4. Annotate a copy of the *300x300* image
+        # -------------------------------------------------------------------------
+        annotated = pil_for_model.copy()
+        draw = ImageDraw.Draw(annotated)
+
+        try:
+            font = ImageFont.truetype("arial.ttf", size=12)
+        except OSError:
+            font = ImageFont.load_default()
+
+        K = boxes.shape[0]
+        if K > 0:
+            for box, label, score in zip(boxes, labels, scores):
+                x1, y1, x2, y2 = box.tolist()
+
+                # Draw rectangle
+                draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
+
+                # Resolve class label
+                cls_idx = int(label)
+                cls_str = idx_to_class.get(cls_idx, str(cls_idx))
+
+                text = f"{cls_str}: {score:.2f}"
+
+                # Text background box
+                text_box = draw.textbbox((0, 0), text, font=font)
+                tw = text_box[2] - text_box[0]
+                th = text_box[3] - text_box[1]
+
+                text_x = x1
+                text_y = max(y1 - th, 0)
+
+                draw.rectangle([text_x, text_y, text_x + tw, text_y + th],
+                            fill="black")
+                draw.text((text_x, text_y), text, fill="white", font=font)
+
+        # -------------------------------------------------------------------------
+        # 5. Resize both images to the final target_size and concatenate
+        # -------------------------------------------------------------------------
+        # IMPORTANT: PIL expects (width, height)
+        out_w, out_h = target_width, target_height
+
+        left_panel = pil_for_model.resize((out_w, out_h), Image.BILINEAR)
+        right_panel = annotated.resize((out_w, out_h), Image.BILINEAR)
+
+        combined = Image.new("RGB", (2 * out_w, out_h))
+        combined.paste(left_panel, (0, 0))
+        combined.paste(right_panel, (out_w, 0))
+
+        return combined
+
+
+
     @staticmethod
     def iou_nms(boxes: torch.Tensor,
                 scores: torch.Tensor,
@@ -514,8 +658,8 @@ class mySSD(nn.Module):
 
 
     def encode_ssd(self,
-                   gt_boxes_xyxy: torch.Tensor,          # [G,4] normalized (cx,cy,w,h)
-                   gt_labels: torch.Tensor,                # [G]
+                   gt_boxes_xyxy: torch.Tensor,
+                   gt_labels: torch.Tensor,
                    iou_thresh: float = 0.5,
                    background_class: int = 0,
                    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -595,7 +739,7 @@ class mySSD(nn.Module):
     @staticmethod
     def decode_ssd(loc: torch.Tensor,
                    priors: torch.Tensor,
-                   variances: Tuple[float, float] = (0.1, 0.2),
+                   variances: Tuple[float, float],
                    ) -> torch.Tensor:
         """
         Inputs
