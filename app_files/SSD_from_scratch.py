@@ -541,7 +541,6 @@ class mySSD(nn.Module):
         # 2. Create the PIL image used for prediction and preprocess
         # -------------------------------------------------------------------------
         # For prediction and drawing, work in the same 300x300 space
-        # pil_for_model = pil_orig.resize(model_size, Image.BILINEAR)
 
         preprocess = v2.Compose([
             v2.ToImage(),
@@ -570,22 +569,11 @@ class mySSD(nn.Module):
         labels = pred["labels"].to("cpu")  # [K]
         scores = pred["scores"].to("cpu")  # [K]
 
-        # Map boxes to original image coordinates
-        # orig_w, orig_h = pil_orig.size
-        # model_w, model_h = model_size      # (300, 300)
-
-        # scale_x = orig_w / model_w
-        # scale_y = orig_h / model_h
-
-        # boxes_orig = boxes.clone()
-        # boxes_orig[:, [0, 2]] *= scale_x   # x1, x2
-        # boxes_orig[:, [1, 3]] *= scale_y   # y1, y2
-
         # -------------------------------------------------------------------------
         # 4. Annotate a copy of the *300x300* image
         # -------------------------------------------------------------------------
-        line_width = 2          # fixed, now meaningful
-        font_size = 14          # fixed, now meaningful
+        line_width = 2
+        font_size = 14
 
         # IMPORTANT: PIL expects (width, height)
         out_w, out_h = target_width, target_height
@@ -614,17 +602,28 @@ class mySSD(nn.Module):
 
             cls_idx = int(label)
             cls_str = idx_to_class.get(cls_idx, str(cls_idx))
-            text = f"{cls_str}" # f"{cls_str}: {score:.2f}"
+            text = f"{cls_str}"
 
+            # bbox of text when baseline is at (0, 0)
             text_box = draw.textbbox((0, 0), text, font=font)
             tw = text_box[2] - text_box[0]
-            th = text_box[3] - text_box[1]
+            th = text_box[3] - text_box[1]   # total text height
+            ymin = text_box[1]               # usually negative
 
             text_x = x1
-            text_y = max(y1 - th, 0)
+            text_top = max(y1 - th, 0)       # desired *top* of text background
 
-            draw.rectangle([text_x, text_y, text_x + tw, text_y + th], fill="red")
-            draw.text((text_x, text_y), text, fill="white", font=font)
+            # Baseline y so that the text's top is at text_top
+            baseline_y = text_top - ymin
+
+            # Background rectangle exactly covering the text bbox
+            draw.rectangle(
+                [text_x, text_top, text_x + tw, text_top + th],
+                fill="red"
+            )
+            # Draw text with correct baseline
+            draw.text((text_x, baseline_y), text, fill="white", font=font)
+
 
 
         # -------------------------------------------------------------------------

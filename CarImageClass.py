@@ -368,7 +368,7 @@ def get_file_path_plus_dataframe(targ_dir: str,
             all_paths = [targ_dir / n for n in file_list]
             file_pct = 1
         
-        if (file_pct < 0) | (file_pct > 1):
+        if (file_pct < 0) or (file_pct > 1):
             raise TypeError("file_pct must be between 0 and 1.")
         
         num_files = np.floor((len(all_paths) * file_pct)).astype(int)
@@ -421,7 +421,7 @@ def make_train_test_split(full_set: ImageClass,
         testing ImageClass file of size len(full_set) * test_size
         """
 
-        if (test_size <= 0 ) | (test_size >= 1):
+        if (test_size <= 0 ) or (test_size >= 1):
             raise ValueError(f"Test size should be a number between 0 and 1, recieved {test_size}.")
         
         # df of original ImageClass file

@@ -1,4 +1,4 @@
-# test_app_gemini.py
+# ssd_demo_app.py
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from io import BytesIO
@@ -23,10 +23,10 @@ ssd_model = mySSD(class_to_idx_dict={'biker': 0, 'car': 1, 'pedestrian': 2, 'tra
 ssd_model.to(device='cpu')
 
 BASE_DIR = Path(__file__).resolve().parent
-WEIGHTS_PATH = BASE_DIR / "saved_models" / "weight_only_mAP_432_11_15_2025.pth"
+WEIGHTS_PATH = BASE_DIR / "saved_models" / "last_11_26_2025_mAP_467_noZoomOut_weight_only.pth"
 
 state_dict = torch.load(WEIGHTS_PATH, map_location="cpu")
-ssd_model.load_state_dict(state_dict)
+ssd_model.load_state_dict(state_dict, strict=False)
 ssd_model.eval()
 
 # --- FRONTEND ---

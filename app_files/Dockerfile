@@ -22,4 +22,4 @@ COPY . .
 ENV PORT=8080
 
 # Run via uvicorn; note the use of $PORT
-CMD ["sh", "-c", "uvicorn test_app_gemini:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn ssd_demo_app:app --host 0.0.0.0 --port ${PORT}"]
