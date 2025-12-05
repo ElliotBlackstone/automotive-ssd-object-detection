@@ -1,6 +1,6 @@
 # Automotive object detection via a SSD model built from scratch
 In this project, the single shot multibox detector (SSD) model of W. Liu, et al. (see [here](https://link.springer.com/chapter/10.1007/978-3-319-46448-0_2)) is constructed from scratch.
-This model is trained and tested on an automotive focused dataset, but all ideas and code are applicable in other scenarios.
+This model is trained and tested on an automotive focused dataset, but all ideas and code are applicable in other scenarios.  A high level explanation of how the model works is given in [SSD_explained.ipynb](/SSD_explained.ipynb).
 
 
 <!--
