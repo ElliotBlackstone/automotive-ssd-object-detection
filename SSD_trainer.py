@@ -1,38 +1,20 @@
 import torch
-from torch import nn
-
-import torchvision
 from torchvision.transforms import v2
 from torchvision.ops import box_convert, nms, clip_boxes_to_image, box_iou
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from torchvision.tv_tensors import BoundingBoxes as TVBoxes
 
 from pathlib import Path
-from PIL import Image
 from typing import Tuple, Dict, List
-import pandas as pd
 import numpy as np
 import math
 import random
-import os
-
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from matplotlib.figure import Figure
-from matplotlib.axes import Axes
-
 from tqdm.auto import tqdm
 import time
 
-from collections import OrderedDict
-
 from SSD_from_scratch import mySSD
 
-
-
-# TODO: write function that takes a .jpg image as an input
-#       and returns an image of the same size with bounding
-#       box and labels.
 
 
 

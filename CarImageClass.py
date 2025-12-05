@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.figure import Figure
-from sklearn.model_selection import train_test_split, StratifiedGroupKFold
+from sklearn.model_selection import StratifiedGroupKFold
 import warnings
 
 
