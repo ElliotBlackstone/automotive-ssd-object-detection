@@ -477,21 +477,20 @@ class mySSD(nn.Module):
     
 
 
-
     def show_prediction_side_by_side(self,
-                                     image_path: str | None,
-                                     pil_img: Image.Image | None,
-                                     score_thresh: float = 0.2,
-                                     nms_thresh: float = 0.5,
-                                     max_per_img: int = 100,
-                                     class_agnostic: bool = False,
-                                     target_width: int = 512,
-                                     target_height: int = 512,
+                                    image_path: str | None,
+                                    pil_img: Image.Image | None,
+                                    score_thresh: float = 0.2,
+                                    nms_thresh: float = 0.5,
+                                    max_per_img: int = 100,
+                                    class_agnostic: bool = False,
+                                    target_height: int = 512,
                                     ) -> Image.Image:
         """
         Load an image from disk, run self.predict on it, and return a new image with
         two panels side by side:
-        - left:  original image (size target_size)
+        - left:  original image (resized to height = target_height, width chosen to
+                preserve the original aspect ratio)
         - right: same image with predicted bounding boxes + labels + scores
 
         Parameters
@@ -499,8 +498,10 @@ class mySSD(nn.Module):
         self
             SSD model instance providing a .predict(...) method with the signature
             given in the prompt.
-        image_path : str
-            Path to the input image file.
+        image_path : str | None
+            Path to the input image file. Mutually exclusive with `pil_img`.
+        pil_img : PIL.Image.Image | None
+            Pre-loaded PIL image. Mutually exclusive with `image_path`.
         score_thresh : float, optional (default=0.2)
             Score threshold passed to self.predict.
         nms_thresh : float, optional (default=0.5)
@@ -509,38 +510,46 @@ class mySSD(nn.Module):
             Maximum number of detections per image (passed to self.predict).
         class_agnostic : bool, optional (default=False)
             Whether to perform class-agnostic NMS in self.predict.
+        target_height : int, optional (default=512)
+            Desired display height. The display width is chosen to preserve the
+            original aspect ratio after EXIF correction.
 
         Returns
         -------
         combined_image : PIL.Image.Image
-            A PIL image of size (H, 2*W). The left half is the original resized
-            image, the right half is the annotated image.
+            A PIL image of size (target_height, 2 * out_w). The left half is the
+            original resized image, the right half is the annotated image.
         """
 
-        if ((image_path is not None) and (pil_img is not None)) or ((image_path is None) and (pil_img is None)):
-            raise TypeError(f"An image path or PIL image should be supplied, not both or neither.  Recieved image path {image_path} and PIL image {None if pil_img is None else 'img recieved'}.")
+        if ((image_path is not None) and (pil_img is not None)) or \
+        ((image_path is None) and (pil_img is None)):
+            raise TypeError(
+                "An image path or PIL image should be supplied, not both or neither. "
+                f"Received image path {image_path} and "
+                f"PIL image {None if pil_img is None else 'img received'}."
+            )
 
         device = next(self.parameters()).device
         class_to_idx = self.class_to_idx
         idx_to_class = self.idx_to_class
 
         # -------------------------------------------------------------------------
-        # 1. Load original image
+        # 1. Load original image (and fix orientation)
         # -------------------------------------------------------------------------
         if image_path is not None:
             pil_orig = Image.open(image_path).convert("RGB")
         else:
             pil_orig = pil_img
-        
+
         pil_orig = ImageOps.exif_transpose(pil_orig)
 
-        # Model input size (must match training)
-        model_size = (300, 300)  # (width, height) for PIL
+        # Get original (width, height) after EXIF correction
+        orig_w, orig_h = pil_orig.size
 
         # -------------------------------------------------------------------------
-        # 2. Create the PIL image used for prediction and preprocess
+        # 2. Model input preprocessing (fixed 300x300 for the SSD)
         # -------------------------------------------------------------------------
-        # For prediction and drawing, work in the same 300x300 space
+        model_size = (300, 300)  # (width, height) for PIL
 
         preprocess = v2.Compose([
             v2.ToImage(),
@@ -550,8 +559,8 @@ class mySSD(nn.Module):
                         std=[0.229, 0.224, 0.225]),
         ])
 
-        img_tensor = preprocess(pil_orig)       # [3, 300, 300]
-        img_tensor = img_tensor.unsqueeze(0).to(device)  # [1, 3, 300, 300]
+        img_tensor = preprocess(pil_orig)                  # [3, 300, 300]
+        img_tensor = img_tensor.unsqueeze(0).to(device)    # [1, 3, 300, 300]
 
         # -------------------------------------------------------------------------
         # 3. Run prediction
@@ -570,20 +579,33 @@ class mySSD(nn.Module):
         scores = pred["scores"].to("cpu")  # [K]
 
         # -------------------------------------------------------------------------
-        # 4. Annotate a copy of the *300x300* image
+        # 4. Choose display size with fixed height and aspect-preserving width
+        # -------------------------------------------------------------------------
+        # Fix output height
+        out_h = target_height
+
+        # Preserve aspect ratio: out_w / out_h = orig_w / orig_h
+        if orig_h == 0:
+            raise ValueError("Original image has zero height; cannot compute aspect ratio.")
+        aspect = orig_w / orig_h
+        out_w = max(1, int(round(out_h * aspect)))  # ensure at least 1 pixel wide
+
+        # Resize original for display
+        # IMPORTANT: PIL expects (width, height)
+        pil_disp = pil_orig.resize((out_w, out_h), Image.LANCZOS)
+
+        # -------------------------------------------------------------------------
+        # 5. Annotate a copy of the display image
         # -------------------------------------------------------------------------
         line_width = 2
         font_size = 14
-
-        # IMPORTANT: PIL expects (width, height)
-        out_w, out_h = target_width, target_height
-        pil_disp = pil_orig.resize((out_w, out_h), Image.LANCZOS)
 
         annotated = pil_disp.copy()
         draw = ImageDraw.Draw(annotated)
 
         model_w, model_h = model_size  # (300, 300)
 
+        # Scale boxes from 300x300 model space to (out_w, out_h) display space
         scale_x = out_w / model_w
         scale_y = out_h / model_h
 
@@ -624,19 +646,18 @@ class mySSD(nn.Module):
             # Draw text with correct baseline
             draw.text((text_x, baseline_y), text, fill="white", font=font)
 
-
-
         # -------------------------------------------------------------------------
-        # 5. Resize both images to the final target_size and concatenate
+        # 6. Concatenate left (original) and right (annotated) panels
         # -------------------------------------------------------------------------
-        left_panel  = pil_disp               # display-sized original
-        right_panel = annotated              # display-sized annotated
+        left_panel = pil_disp
+        right_panel = annotated
 
         combined = Image.new("RGB", (2 * out_w, out_h))
         combined.paste(left_panel, (0, 0))
         combined.paste(right_panel, (out_w, 0))
 
         return combined
+
 
 
 

@@ -23,7 +23,7 @@ ssd_model = mySSD(class_to_idx_dict={'biker': 0, 'car': 1, 'pedestrian': 2, 'tra
 ssd_model.to(device='cpu')
 
 BASE_DIR = Path(__file__).resolve().parent
-WEIGHTS_PATH = BASE_DIR / "saved_models" / "last_11_26_2025_mAP_467_noZoomOut_weight_only.pth"
+WEIGHTS_PATH = BASE_DIR / "saved_models" / "12_6_2025_mAP_529_weight_only.pth"
 
 state_dict = torch.load(WEIGHTS_PATH, map_location="cpu")
 ssd_model.load_state_dict(state_dict, strict=False)
@@ -45,7 +45,7 @@ def index():
       <body>
         <h1>Single shot detector Demo</h1>
         <p>
-            The model was trained on images from dashcam footage. The model will detect 5 classes: biker, car, pedestrian, traffic light, and truck (commercial). </br>
+            The model was trained on images from day time dashcam footage and will detect 5 classes: biker, car, pedestrian, traffic light, and truck (commercial). </br>
             Links: <a href="https://github.com/ElliotBlackstone" target="_blank">GitHub</a>, <a href="https://www.linkedin.com/in/elliot-blackstone-eblackstone/" target="_blank">LinkedIn</a>
         </p>
         
@@ -112,7 +112,6 @@ async def predict(file: UploadFile = File(...)):
                                                      nms_thresh=0.3,
                                                      max_per_img=100,
                                                      class_agnostic=False,
-                                                     target_width=512,
                                                      target_height=512)
 
     # 3) Encode to PNG bytes and return as image/png
