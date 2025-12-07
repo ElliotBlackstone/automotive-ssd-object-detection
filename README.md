@@ -70,4 +70,12 @@ Since the vast majority of objects in the dataset are small compared to the imag
 
 
 ## Website App
-This repository includes an interactive web demo of the SSD model ([link](https://ssd-demo-app-884945419812.us-central1.run.app/)). When a user uploads an image through the browser, the FastAPI backend loads the trained `mySSD` model (biker, car, pedestrian, traffic light, and truck classes, trained on daytime dashcam footage) and calls the model’s `show_prediction_side_by_side` method to generate a visualization. The method preprocesses the uploaded image, runs a forward pass through the detector, and returns a single PNG where the left panel is the original image (resized with preserved aspect ratio) and the right panel overlays the predicted bounding boxes and class labels. The resulting side-by-side image is streamed back directly to the client so users can quickly inspect how the model interprets their own images. The files for the web demo are located in the [app_files](/app_files/) folder.
+This repository includes an interactive web demo of the SSD model ([link](https://ssd-demo-app-884945419812.us-central1.run.app/)). When a user uploads an image through the browser, the FastAPI backend loads the trained `mySSD` model (biker, car, pedestrian, traffic light, and truck classes, trained on daytime dashcam footage) and calls the model’s `show_prediction_side_by_side` method to generate a visualization. The method preprocesses the uploaded image, runs a forward pass through the detector, and returns a single PNG where the left panel is the original image (resized with preserved aspect ratio) and the right panel overlays the predicted bounding boxes and class labels. The resulting side-by-side image is streamed back directly to the client so users can quickly inspect how the model interprets their own images.
+
+The files for the web demo are located in the [app_files](/app_files/) folder.
+
+The images below are from the website.  The left image is user uploaded and the right image contains the model predictions.
+
+![website output 1](./figures/website_predictions/good1.png)
+![website output 2](./figures/website_predictions/good2_from_test_set.png)
+![website output 2](./figures/website_predictions/good4_from_test_set.png)
