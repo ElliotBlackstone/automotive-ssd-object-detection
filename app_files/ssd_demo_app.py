@@ -23,7 +23,7 @@ ssd_model = mySSD(class_to_idx_dict={'biker': 0, 'car': 1, 'pedestrian': 2, 'tra
 ssd_model.to(device='cpu')
 
 BASE_DIR = Path(__file__).resolve().parent
-WEIGHTS_PATH = BASE_DIR / "saved_models" / "12_6_2025_mAP_529_weight_only.pth"
+WEIGHTS_PATH = BASE_DIR / "saved_models" / "noZoomOut_Bootstrap.pth"
 
 state_dict = torch.load(WEIGHTS_PATH, map_location="cpu")
 ssd_model.load_state_dict(state_dict, strict=False)
