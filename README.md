@@ -1,5 +1,5 @@
 # Automotive object detection via a SSD model built from scratch
-In this project, the single shot multibox detector (SSD) model of W. Liu, et al. (see [here](https://link.springer.com/chapter/10.1007/978-3-319-46448-0_2)) is constructed from scratch.
+In this project, the single shot multibox detector (SSD) model of W. Liu, et al. (see [here](https://link.springer.com/chapter/10.1007/978-3-319-46448-0_2)) is constructed from scratch, with minor modifications.
 This model is trained and tested on an automotive focused dataset, but all ideas and code are applicable in other scenarios.  A high level explanation of how the model works is given in [SSD_explained.ipynb](/SSD_explained.ipynb).
 
 
@@ -51,7 +51,7 @@ Optimization uses SGD with Nesterov momentum and weight decay, together with a c
 
 The helper `build_optimizer_and_scheduler` builds an SGD optimizer (chosen values: base LR 3e-3, momentum 0.9, weight decay 5e-4) and a `LambdaLR` scheduler that first linearly increases the learning rate from 0 to the base LR over a specified number of warmup epochs, then decays it following a cosine curve down to a minimum LR (chosen value: 1e-6) over the remaining training steps. The scheduler is designed to be stepped once per optimizer step (per mini-batch), and the training loop optionally supports stepping per batch or per epoch depending on the `sched_step_w_opt` flag. The trainer also supports early stopping based on validation mAP, periodic and “best” checkpoint saving (including optimizer/scheduler state and RNG state), and utility functions to merge and plot loss/mAP curves across multiple training runs.
 
-Models were trained for 150 epochs with the previously described optimizer and schuduler.
+Models were trained for 150 epochs with the previously described optimizer and schuduler using [SSD_model_train.ipynb](/SSD_model_train.ipynb).
 
 ## Results
 Three models were trained for 150 epochs with the optimizer and schuduler previously described.  The first model (named "Zoom out, no bootstrap") was trained with an additional image transformation, `RandomZoomOut`.  The second model (named "No zoom out, no bootstrap") was trained with no additional augmentations.  The final model (named "No zoom out, bootstrap") had the training set “bootstrapped” by oversampling image filenames according to how many objects they contain: images with 0 objects are used once, those with 1–2 objects are duplicated, those with 3–6, 7–9, and ≥10 objects are repeated 3, 4, and 5 times respectively in the `file_list`. This weighted duplication increases the effective number of training samples and biases each epoch toward images with richer annotations, without fabricating any synthetic labels.  The training loss/mAP@0.50 information per epoch for the top performing model is below.  The mAP subplot is mAP@0.50 evaluated on the validation set per epoch.
