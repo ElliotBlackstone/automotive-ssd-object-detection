@@ -204,38 +204,6 @@ def index():
     </html>
     """
 
-# old script, save just in case    
-        # <script>
-        #   const form = document.getElementById('uploadForm');
-        #   const resultImg = document.getElementById('predictionImage');
-
-        #   form.addEventListener('submit', async (event) => {
-        #     event.preventDefault();
-
-        #     const formData = new FormData(form);
-
-        #     try {
-        #         const response = await fetch('/predict', {
-        #             method: 'POST',
-        #             body: formData
-        #         });
-
-        #         if (response.ok) {
-        #             const blob = await response.blob();
-        #             const imageUrl = URL.createObjectURL(blob);
-                    
-        #             resultImg.src = imageUrl;
-        #             resultImg.style.display = 'block';
-        #         } else {
-        #             alert('Error processing image');
-        #         }
-        #     } catch (error) {
-        #         console.error('Error:', error);
-        #         alert('An error occurred.');
-        #     }
-        #   });
-        # </script>
-
 
 @app.get("/model-card", response_class=HTMLResponse)
 def model_card():
@@ -386,24 +354,3 @@ async def predict(file: UploadFile = File(...)):
     out_img.save(buf, format="PNG")
     buf.seek(0)
     return Response(content=buf.getvalue(), media_type="image/png")
-
-# @app.post("/predict")
-# async def predict(file: UploadFile = File(...)):
-#     # 1) Read uploaded image
-#     data = await file.read()
-#     pil_img = Image.open(BytesIO(data)).convert("RGB")
-
-#     # 2) Run your existing side-by-side code
-#     out_img = ssd_model.show_prediction_side_by_side(image_path=None,
-#                                                      pil_img=pil_img,
-#                                                      score_thresh=0.2,
-#                                                      nms_thresh=0.3,
-#                                                      max_per_img=100,
-#                                                      class_agnostic=False,
-#                                                      target_height=512)
-
-#     # 3) Encode to PNG bytes and return as image/png
-#     buf = BytesIO()
-#     out_img.save(buf, format="PNG")
-#     buf.seek(0)
-#     return Response(content=buf.getvalue(), media_type="image/png")
