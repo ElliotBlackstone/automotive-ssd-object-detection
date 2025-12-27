@@ -1,9 +1,9 @@
 # ssd_demo_app.py
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from io import BytesIO
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import torch
 from SSD_from_scratch import mySSD
 import os
@@ -91,7 +91,7 @@ def index():
           </li>
           <li>
             <strong>Stack</strong>:
-            Achieved PyTorch, FastAPI, Uvicorn, Docker, Google Cloud Run.
+            PyTorch, FastAPI, Uvicorn, Docker, Google Cloud Run.
           </li>
           <li>
             <strong>Model card</strong>:
@@ -115,41 +115,81 @@ def index():
           <input type="submit" value="Run detection">
         </form>
 
+        <div id="errorMessage" style="display:none; color:#b00020; margin-top:10px;"></div>
+
         <div id="result-container">
             <h3>Prediction Result:</h3>
             <img id="predictionImage" src="" alt="Predicted Image" />
         </div>
 
+
         <script>
           const form = document.getElementById('uploadForm');
           const resultImg = document.getElementById('predictionImage');
+          const errorBox = document.getElementById('errorMessage');
+
+          function showError(msg) {
+            errorBox.textContent = msg;
+            errorBox.style.display = 'block';
+          }
+          function clearError() {
+            errorBox.textContent = '';
+            errorBox.style.display = 'none';
+          }
 
           form.addEventListener('submit', async (event) => {
             event.preventDefault();
+            clearError();
+
+            const fileInput = form.querySelector('input[type="file"][name="file"]');
+            const file = fileInput?.files?.[0];
+
+            if (!file) {
+              showError("Please choose an image file.");
+              return;
+            }
+
+            // Frontend check: MIME type is usually available
+            if (file.type && !file.type.startsWith("image/")) {
+              showError("Invalid file type. Please upload an image (PNG/JPG/JPEG/WebP).");
+              return;
+            }
 
             const formData = new FormData(form);
 
             try {
-                const response = await fetch('/predict', {
-                    method: 'POST',
-                    body: formData
-                });
+              const response = await fetch('/predict', { method: 'POST', body: formData });
 
-                if (response.ok) {
-                    const blob = await response.blob();
-                    const imageUrl = URL.createObjectURL(blob);
-                    
-                    resultImg.src = imageUrl;
-                    resultImg.style.display = 'block';
-                } else {
-                    alert('Error processing image');
-                }
+              if (!response.ok) {
+                // Try to read FastAPI's JSON error: { "detail": "..." }
+                let msg = "Error processing image.";
+                try {
+                  const data = await response.json();
+                  if (data && typeof data.detail === "string") msg = data.detail;
+                } catch (_) {}
+                showError(msg);
+                resultImg.style.display = 'none';
+                return;
+              }
+
+              const contentType = response.headers.get("content-type") || "";
+              if (!contentType.startsWith("image/")) {
+                showError("Server did not return an image. Please try a different file.");
+                resultImg.style.display = 'none';
+                return;
+              }
+
+              const blob = await response.blob();
+              const imageUrl = URL.createObjectURL(blob);
+              resultImg.src = imageUrl;
+              resultImg.style.display = 'block';
             } catch (error) {
-                console.error('Error:', error);
-                alert('An error occurred.');
+              showError("Network error. Please try again.");
+              resultImg.style.display = 'none';
             }
           });
         </script>
+
 
         <hr>
         <p><strong>For recruiters / hiring managers</strong></p>
@@ -164,6 +204,37 @@ def index():
     </html>
     """
 
+# old script, save just in case    
+        # <script>
+        #   const form = document.getElementById('uploadForm');
+        #   const resultImg = document.getElementById('predictionImage');
+
+        #   form.addEventListener('submit', async (event) => {
+        #     event.preventDefault();
+
+        #     const formData = new FormData(form);
+
+        #     try {
+        #         const response = await fetch('/predict', {
+        #             method: 'POST',
+        #             body: formData
+        #         });
+
+        #         if (response.ok) {
+        #             const blob = await response.blob();
+        #             const imageUrl = URL.createObjectURL(blob);
+                    
+        #             resultImg.src = imageUrl;
+        #             resultImg.style.display = 'block';
+        #         } else {
+        #             alert('Error processing image');
+        #         }
+        #     } catch (error) {
+        #         console.error('Error:', error);
+        #         alert('An error occurred.');
+        #     }
+        #   });
+        # </script>
 
 
 @app.get("/model-card", response_class=HTMLResponse)
@@ -280,21 +351,59 @@ def examples():
 # --- PREDICTION ENDPOINT ---
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    # 1) Read uploaded image
+    # 0) Reject obvious non-images
+    content_type = (file.content_type or "").lower()
+    filename = (file.filename or "").lower()
+
+    # content_type is the best signal; filename check is a fallback
+    if not content_type.startswith("image/"):
+        # common case: PDFs show as application/pdf
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Please upload an image (PNG/JPG/JPEG/WebP)."
+        )
+
     data = await file.read()
-    pil_img = Image.open(BytesIO(data)).convert("RGB")
+    try:
+        pil_img = Image.open(BytesIO(data)).convert("RGB")
+    except (UnidentifiedImageError, OSError):
+        raise HTTPException(
+            status_code=400,
+            detail="Could not read that file as an image. Please upload a valid PNG/JPG/JPEG/WebP."
+        )
 
-    # 2) Run your existing side-by-side code
-    out_img = ssd_model.show_prediction_side_by_side(image_path=None,
-                                                     pil_img=pil_img,
-                                                     score_thresh=0.2,
-                                                     nms_thresh=0.3,
-                                                     max_per_img=100,
-                                                     class_agnostic=False,
-                                                     target_height=512)
+    out_img = ssd_model.show_prediction_side_by_side(
+        image_path=None,
+        pil_img=pil_img,
+        score_thresh=0.2,
+        nms_thresh=0.3,
+        max_per_img=100,
+        class_agnostic=False,
+        target_height=512,
+    )
 
-    # 3) Encode to PNG bytes and return as image/png
     buf = BytesIO()
     out_img.save(buf, format="PNG")
     buf.seek(0)
     return Response(content=buf.getvalue(), media_type="image/png")
+
+# @app.post("/predict")
+# async def predict(file: UploadFile = File(...)):
+#     # 1) Read uploaded image
+#     data = await file.read()
+#     pil_img = Image.open(BytesIO(data)).convert("RGB")
+
+#     # 2) Run your existing side-by-side code
+#     out_img = ssd_model.show_prediction_side_by_side(image_path=None,
+#                                                      pil_img=pil_img,
+#                                                      score_thresh=0.2,
+#                                                      nms_thresh=0.3,
+#                                                      max_per_img=100,
+#                                                      class_agnostic=False,
+#                                                      target_height=512)
+
+#     # 3) Encode to PNG bytes and return as image/png
+#     buf = BytesIO()
+#     out_img.save(buf, format="PNG")
+#     buf.seek(0)
+#     return Response(content=buf.getvalue(), media_type="image/png")
