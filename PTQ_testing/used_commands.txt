@@ -1,0 +1,15 @@
+
+
+python PTQ_testing\bench.py ^
+  --backend ort_int8 --mode e2e --batch 1 --runs 200 --threads 4 ^
+  --weights "C:\Users\eblac\Documents\GitHub\self-driving-car\app_files\saved_models\noZoomOut_Bootstrap.pth" ^
+  --onnx_int8 "C:\Users\eblac\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8.onnx"
+
+
+
+python PTQ_testing\eval.py ^
+  --weights "C:\Users\eblac\Documents\GitHub\self-driving-car\app_files\saved_models\noZoomOut_Bootstrap.pth" ^
+  --train_path "C:\Users\eblac\Documents\GitHub\self-driving-car\PATH_TO_TRAIN_DIR" ^
+  --onnx_fp32 "C:\Users\eblac\Documents\GitHub\self-driving-car\ssd_stage_b.onnx" ^
+  --onnx_int8 "C:\Users\eblac\Documents\GitHub\self-driving-car\ssd_int8.onnx" ^
+  --batch 8 --threads 1

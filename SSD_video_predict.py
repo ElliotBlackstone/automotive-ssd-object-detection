@@ -12,17 +12,17 @@ import torch
 _IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 1, 1)
 
-def preprocess_frame_bgr_to_tensor(
-    frame_bgr: np.ndarray,
-    device: torch.device,
-    size: Tuple[int, int] = (300, 300),  # (W,H)
-) -> torch.Tensor:
+def preprocess_frame_bgr_to_tensor(frame_bgr: np.ndarray,
+                                   device: torch.device,
+                                   size: Tuple[int, int] = (300, 300),  # (W,H)
+                                   ) -> torch.Tensor:
     """
     Matches:
       ToDtype(float32, scale=True) -> Resize((300,300)) -> Normalize(ImageNet mean/std)
     Input: BGR uint8 (H,W,3) from OpenCV
     Output: float32 tensor (3,H,W) normalized
     """
+    
     # BGR -> RGB
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
@@ -41,18 +41,18 @@ def preprocess_frame_bgr_to_tensor(
     return t
 
 
-def draw_detections_bgr(
-    frame_bgr: np.ndarray,
-    boxes_xyxy: np.ndarray,
-    labels: np.ndarray,
-    scores: np.ndarray,
-    label_map: Optional[Dict[int, str]] = None,
-    thickness: int = 2,
-) -> np.ndarray:
+def draw_detections_bgr(frame_bgr: np.ndarray,
+                        boxes_xyxy: np.ndarray,
+                        labels: np.ndarray,
+                        scores: np.ndarray,
+                        label_map: Optional[Dict[int, str]] = None,
+                        thickness: int = 2,
+                        ) -> np.ndarray:
     """
     Draws on a BGR frame. boxes_xyxy must be in ORIGINAL frame pixel coords.
     All boxes (and caption backgrounds) are red.
     """
+
     h, w = frame_bgr.shape[:2]
     out = frame_bgr.copy()
 
@@ -90,21 +90,21 @@ def draw_detections_bgr(
 
 
 
-def annotate_video_file(
-    model,
-    in_path: str,
-    out_path: str,
-    *,
-    device: str = "cuda",
-    model_input_size: Tuple[int, int] = (300, 300),  # (W,H)
-    score_thresh: float = 0.2,
-    nms_thresh: float = 0.5,
-    max_per_img: int = 100,
-    class_agnostic: bool = False,
-    label_map: Optional[Dict[int, str]] = None,
-    batch_size: int = 1,
-    max_frames: Optional[int] = None,  # set for quick tests
-) -> None:
+def annotate_video_file(model,
+                        in_path: str,
+                        out_path: str,
+                        *,
+                        device: str = "cuda",
+                        model_input_size: Tuple[int, int] = (300, 300),  # (W,H)
+                        score_thresh: float = 0.2,
+                        nms_thresh: float = 0.5,
+                        max_per_img: int = 100,
+                        class_agnostic: bool = False,
+                        label_map: Optional[Dict[int, str]] = None,
+                        batch_size: int = 1,
+                        max_frames: Optional[int] = None,  # set for quick tests
+                        ) -> None:
+    
     device_t = torch.device(device)
     model.eval()
 

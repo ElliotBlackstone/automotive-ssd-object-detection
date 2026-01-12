@@ -365,6 +365,8 @@ def get_file_path_plus_dataframe(targ_dir: str,
         if file_list is None:
             all_paths = list(pathlib.Path(targ_dir).glob("*.jpg"))
         else:
+            if isinstance(targ_dir, str):
+                targ_dir = pathlib.Path(targ_dir)
             all_paths = [targ_dir / n for n in file_list]
             file_pct = 1
         
