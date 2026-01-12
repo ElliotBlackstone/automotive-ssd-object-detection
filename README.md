@@ -84,3 +84,12 @@ The images below are from the website.  The left image is user uploaded and the 
 ![website output 2](./figures/website_predictions/good4_from_test_set.png)
 
 
+## Post Training Quantization
+I exported the SSD network forward pass to ONNX and ran inference on CPU using ONNX Runtime (ORT). I first verified FP32 parity against the original PyTorch model, then benchmarked latency (p50/p95) and evaluated accuracy on the same validation split (mAP@0.5). Compared to PyTorch, ORT FP32 reduced median latency from 295.8 ms to 258.1 ms with identical mAP@0.5 (0.5353). Applying post-training static INT8 quantization with calibration on validation images further reduced median latency to 63.6 ms (p95 79.7 ms), while maintaining essentially the same detection quality (mAP@0.5 0.5339, a −0.0014 absolute drop).  The files used to create this table are available in the [PTQ testing](/PTQ_testing/) folder.
+
+| Backend | p50 latency (ms) | p95 latency (ms) | mAP@0.5 | Δp50 vs torch (ms) | ΔmAP@0.5 vs torch |
+|---|---:|---:|---:|---:|---:|
+| torch | 295.837 | 327.177 | 0.5353 | 0.000 | 0.0000 |
+| ort_fp32 | 258.050 | 278.836 | 0.5353 | -37.787 | 0.0000 |
+| ort_int8 | 63.553 | 79.703 | 0.5339 | -232.284 | -0.0014 |
+
