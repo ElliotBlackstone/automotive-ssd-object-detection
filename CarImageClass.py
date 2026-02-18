@@ -195,10 +195,30 @@ class ImageClass(Dataset):
         else:
             raise TypeError(f"Unsupported image type: {type(img)}")
 
-        if arr.dtype.kind == "f" and arr.max() <= 1.0:
-            arr = (arr * 255.0).clip(0, 255).astype(np.uint8)
+        if arr.dtype.kind == "f":
+            # Handle tiny overshoot or NaNs safely
+            arr = np.nan_to_num(arr, nan=0.0, posinf=1.0, neginf=0.0)
+
+            mx = float(arr.max())
+            mn = float(arr.min())
+
+            # Case 1: float image approximately in [0,1] (allow small overshoot)
+            if mx <= 1.5:
+                arr = np.clip(arr, 0.0, 1.0)
+                arr = (arr * 255.0).astype(np.uint8)
+
+            # Case 2: float image already in [0,255]
+            elif mx <= 255.0 and mn >= 0.0:
+                arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
+
+            else:
+                # Fallback: rescale by min/max (last resort; better to fix upstream)
+                arr = (arr - mn) / (mx - mn + 1e-8)
+                arr = (np.clip(arr, 0.0, 1.0) * 255.0).astype(np.uint8)
+
         elif arr.dtype != np.uint8:
             arr = arr.astype(np.uint8)
+
 
         # ----- figure / axes -----
         H, W = arr.shape[:2]
@@ -308,16 +328,24 @@ class ImageClass(Dataset):
                 ax.add_patch(rect)
 
                 if pred_label:
-                    mask_pred = pred_dict['labels'].tolist()  # 0, 1, ..., C-2
+                    mask_pred = pred_dict['labels']
+                    # convert from tensor to list
+                    if isinstance(mask_pred, torch.Tensor):
+                        mask_pred = mask_pred.tolist()  # 0, 1, ..., C-2
+                    
                     # convert from mask to true labels
-                    id2name_dict = {v: k for k, v in label_dict.items()}
-                    label_pred = []
-                    for j in mask_pred:
-                        if j in id2name_dict:
-                            label_pred.append(id2name_dict[j])
-                        else:
-                            # raise ValueError(f"Unknown class id {i}")
-                            label_pred.append("unknown")
+                    if isinstance(mask_pred[0], str) == False:
+                        id2name_dict = {v: k for k, v in label_dict.items()}
+                        label_pred = []
+                        for j in mask_pred:
+                            if j in id2name_dict:
+                                label_pred.append(id2name_dict[j])
+                            else:
+                                # raise ValueError(f"Unknown class id {i}")
+                                label_pred.append("unknown")
+                    else:
+                        label_pred = mask_pred
+
                     if i >= len(label_pred):
                         # mismatch
                         raise IndexError(f"label_pred length {len(label_pred)} < number of boxes {pb_img.shape[0]}")
