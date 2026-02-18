@@ -26,7 +26,7 @@ def preprocess_frame_bgr_to_tensor(frame_bgr: np.ndarray,
     # BGR -> RGB
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-    # Resize to model input (stretch, as per your transforms)
+    # Resize to model input
     out_w, out_h = size
     rgb = cv2.resize(rgb, (out_w, out_h), interpolation=cv2.INTER_AREA)
 
@@ -119,7 +119,7 @@ def annotate_video_file(model,
     orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # mp4v is broadly supported. If you need h264, that depends on your local OpenCV/ffmpeg build.
+   
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out_dir = Path(out_path).parent
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -131,7 +131,7 @@ def annotate_video_file(model,
 
     frames_bgr = []
     frame_count = 0
-    in_w, in_h = model_input_size  # 300,300
+    in_w, in_h = model_input_size  # (300,300)
 
     def flush_batch():
         nonlocal frames_bgr
@@ -154,11 +154,11 @@ def annotate_video_file(model,
             )
 
         for fr_bgr, pred in zip(frames_bgr, preds):
-            boxes = pred["boxes"].detach().cpu().numpy().astype(np.float32)   # in 300x300 pixels
+            boxes = pred["boxes"].detach().cpu().numpy().astype(np.float32)
             labels = pred["labels"].detach().cpu().numpy().astype(np.int32)
             scores = pred["scores"].detach().cpu().numpy().astype(np.float32)
 
-            # map from (300,300) coords back to original frame coords (stretch inverse)
+            # map from (300,300) coords back to original frame coords
             oh, ow = fr_bgr.shape[:2]
             sx = ow / float(in_w)
             sy = oh / float(in_h)
