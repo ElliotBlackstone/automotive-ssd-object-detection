@@ -9,7 +9,11 @@ from SSDInt8_ONNX_Pred import SSDInt8ONNXPredictor, PreprocessConfig
 
 
 # to run:
+# desktop
 # python SSD_int8_realtime_video.py --model C:\Users\eblac\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8.onnx --show-fps
+
+# laptop
+# python SSD_int8_realtime_video.py --model C:\Users\eblac\OneDrive\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_with_pre_post.onnx --show-fps
 
 
 def build_class_names_fg(class_to_idx: dict) -> list[str]:
