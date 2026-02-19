@@ -90,29 +90,18 @@ def main():
     ap.add_argument("--show-fps", action="store_true")
     args = ap.parse_args()
 
-    # Your class_to_idx mapping (foreground indices 0..4)
-    # class_to_idx = {"biker": 0, "car": 1, "pedestrian": 2, "trafficLight": 3, "truck": 4}
-    # class_names_fg = build_class_names_fg(class_to_idx)
-
-    # post_cfg = SSDPostprocessConfig(
-    #     score_thresh=args.score_thresh,
-    #     nms_thresh=args.nms_thresh,
-    #     max_per_img=args.max_per_img,
-    #     class_agnostic=args.class_agnostic,
-    #     variances=(0.1, 0.2),
-    # )
 
     class_to_idx = {"biker": 0, "car": 1, "pedestrian": 2, "trafficLight": 3, "truck": 4}
 
     predictor = SSDInt8ONNXPredictor(
-        onnx_model_path=args.model,        # this should be the stitched model
+        onnx_model_path=args.model,
         class_to_idx=class_to_idx,
         providers=["CPUExecutionProvider"],
-        preprocess_cfg=PreprocessConfig(input_color="bgr"),  # so you can pass frame_bgr directly
+        preprocess_cfg=PreprocessConfig(input_color="bgr"),
     )
 
 
-    cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)  # Windows latency often better with DSHOW
+    cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open camera index {args.camera}")
 
