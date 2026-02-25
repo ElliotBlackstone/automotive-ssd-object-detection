@@ -10,7 +10,7 @@ from SSDInt8_ONNX_Pred import SSDInt8ONNXPredictor, PreprocessConfig
 
 # to run:
 # desktop
-# python SSD_int8_realtime_video.py --model C:\Users\eblac\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8.onnx --show-fps
+# python SSD_int8_realtime_video.py --model C:\Users\eblac\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_with_pre_post.onnx --show-fps
 
 # laptop
 # python SSD_int8_realtime_video.py --model C:\Users\eblac\OneDrive\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_with_pre_post.onnx --show-fps --camera 1
@@ -35,7 +35,7 @@ def draw_predictions_bgr(
     """
     pred = {"labels": [str], "scores": [float], "boxes": np.ndarray (K,4) xyxy in frame pixels}
     """
-    out = frame_bgr.copy()
+    out = frame_bgr #.copy()
     H, W = out.shape[:2]
 
     boxes = pred["boxes"]
@@ -119,8 +119,12 @@ def main():
     ok, frame_bgr = cap.read()
     if not ok:
         raise RuntimeError("Failed to read initial frame.")
-    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    _ = predictor(frame_rgb)
+    _ = predictor(frame_bgr)
+    # ok, frame_bgr = cap.read()
+    # if not ok:
+    #     raise RuntimeError("Failed to read initial frame.")
+    # frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    # _ = predictor(frame_rgb)
 
     fps_smoothed = 0.0
     last_print = time.perf_counter()
