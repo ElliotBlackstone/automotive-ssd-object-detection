@@ -120,11 +120,17 @@ def main():
     if not ok:
         raise RuntimeError("Failed to read initial frame.")
     _ = predictor(frame_bgr)
-    # ok, frame_bgr = cap.read()
-    # if not ok:
-    #     raise RuntimeError("Failed to read initial frame.")
-    # frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    # _ = predictor(frame_rgb)
+
+
+
+    # ---- video recording setup ----
+    writer = None
+    out_path = "ssd_int8_demo.mp4"
+    fourcc_out = cv2.VideoWriter_fourcc(*"mp4v")
+    H0, W0 = frame_bgr.shape[:2]
+    writer = cv2.VideoWriter(out_path, fourcc_out, float(args.fps), (W0, H0))
+    if not writer.isOpened():
+        raise RuntimeError("VideoWriter failed to open. Try XVID/AVI or MJPG/AVI.")
 
     fps_smoothed = 0.0
     last_print = time.perf_counter()
@@ -158,6 +164,9 @@ def main():
                     2,
                 )
 
+            if writer is not None:
+                writer.write(vis)
+
             cv2.imshow("SSD INT8 ONNX Runtime", vis)
 
             key = cv2.waitKey(1) & 0xFF
@@ -170,6 +179,9 @@ def main():
                 last_print = now
 
     finally:
+        if writer is not None:
+            writer.release()
+            print(f"Saved video: {out_path}")
         cap.release()
         cv2.destroyAllWindows()
 
