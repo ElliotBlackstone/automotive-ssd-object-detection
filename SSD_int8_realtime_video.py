@@ -88,6 +88,8 @@ def main():
     ap.add_argument("--class-agnostic", action="store_true")
     ap.add_argument("--no-labels", action="store_true")
     ap.add_argument("--show-fps", action="store_true")
+    ap.add_argument("--save-video", action="store_true", help="Save annotated output to a video file")
+    ap.add_argument("--out-video", default="ssd_int8_demo.mp4", type=str, help="Output video path")
     args = ap.parse_args()
 
 
@@ -125,12 +127,19 @@ def main():
 
     # ---- video recording setup ----
     writer = None
-    out_path = "ssd_int8_demo.mp4"
-    fourcc_out = cv2.VideoWriter_fourcc(*"mp4v")
-    H0, W0 = frame_bgr.shape[:2]
-    writer = cv2.VideoWriter(out_path, fourcc_out, float(args.fps), (W0, H0))
-    if not writer.isOpened():
-        raise RuntimeError("VideoWriter failed to open. Try XVID/AVI or MJPG/AVI.")
+    out_path = args.out_video
+
+    if args.save_video:
+        fourcc_out = cv2.VideoWriter_fourcc(*"mp4v")
+        H0, W0 = frame_bgr.shape[:2]
+        writer = cv2.VideoWriter(out_path, fourcc_out, float(args.fps), (W0, H0))
+        if not writer.isOpened():
+            # fallback
+            out_path = out_path.rsplit(".", 1)[0] + ".avi"
+            fourcc_out = cv2.VideoWriter_fourcc(*"XVID")
+            writer = cv2.VideoWriter(out_path, fourcc_out, float(args.fps), (W0, H0))
+            if not writer.isOpened():
+                raise RuntimeError("VideoWriter failed to open (mp4v and XVID).")
 
     fps_smoothed = 0.0
     last_print = time.perf_counter()
