@@ -11,10 +11,10 @@ cd automotive-ssd-object-detection
 
 
 #### 2. Create and activate a Python enviornment
-Use Python $\geq 3.10$.
+Use Python $\geq 3.12$.
 
 ```bash
-conda create -n automotive-ssd python=3.10
+conda create -n automotive-ssd python=3.12
 conda activate automotive-ssd
 ```
 
