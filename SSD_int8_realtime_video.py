@@ -169,6 +169,10 @@ def main():
     writer = None
     out_path = args.out_video
 
+    record_fps = float(args.fps)  # output fps you want the file to have
+    t_start = time.perf_counter()
+    frames_written = 0
+
     if args.save_video:
         fourcc_out = cv2.VideoWriter_fourcc(*"mp4v")
         H0, W0 = frame_bgr.shape[:2]
@@ -214,7 +218,13 @@ def main():
                 )
 
             if writer is not None:
-                writer.write(vis)
+                # writer.write(vis)
+                t_now = time.perf_counter()
+                target_frames = int((t_now - t_start) * record_fps)
+                n_to_write = target_frames - frames_written
+                for _ in range(max(0, n_to_write)):
+                    writer.write(vis)
+                frames_written += max(0, n_to_write)
 
             cv2.imshow("SSD INT8 ONNX Runtime", vis)
 
