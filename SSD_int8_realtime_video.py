@@ -5,6 +5,9 @@ from dataclasses import replace
 import cv2
 import numpy as np
 
+import platform
+import os
+
 from SSDInt8_ONNX_Pred import SSDInt8ONNXPredictor, PreprocessConfig
 
 
@@ -75,6 +78,38 @@ def draw_predictions_bgr(
     return out
 
 
+def open_camera(source, backend: str):
+    backend_map = {
+        "any": cv2.CAP_ANY,
+        "dshow": cv2.CAP_DSHOW,
+        "msmf": cv2.CAP_MSMF,
+        "v4l2": cv2.CAP_V4L2,
+        "gstreamer": cv2.CAP_GSTREAMER,
+    }
+
+    sysname = platform.system().lower()
+
+    if backend != "auto":
+        trial = [backend]
+    else:
+        if sysname == "windows":
+            trial = ["dshow", "msmf", "any"]
+        elif sysname == "linux":
+            trial = ["v4l2", "gstreamer", "any"]
+        else:
+            trial = ["any"]
+
+    last_err = None
+    for b in trial:
+        cap = cv2.VideoCapture(source, backend_map[b])
+        if cap.isOpened():
+            return cap, b
+        last_err = b
+        cap.release()
+
+    raise RuntimeError(f"Could not open camera source={source!r} with backends={trial} (last tried: {last_err})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, type=str, help="Path to INT8 ONNX model (ssd_int8.onnx)")
@@ -90,6 +125,9 @@ def main():
     ap.add_argument("--show-fps", action="store_true")
     ap.add_argument("--save-video", action="store_true", help="Save annotated output to a video file")
     ap.add_argument("--out-video", default="ssd_int8_demo.mp4", type=str, help="Output video path")
+    ap.add_argument("--backend", default="auto", choices=["auto", "any", "dshow", "msmf", "v4l2", "gstreamer"],
+                    help="VideoCapture backend. Use 'auto' for OS-specific fallback.",)
+    ap.add_argument("--device", default=None, help="Optional device path (Linux), e.g. /dev/video2. If set, overrides --camera.",)
     args = ap.parse_args()
 
 
@@ -103,7 +141,9 @@ def main():
     )
 
 
-    cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
+    source = args.device if args.device is not None else args.camera
+    cap, backend_used = open_camera(source, args.backend)
+    print(f"[info] opened camera source={source!r} using backend={backend_used}")
     if not cap.isOpened():
         raise RuntimeError(f"Could not open camera index {args.camera}")
 
