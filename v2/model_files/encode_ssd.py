@@ -1,80 +1,81 @@
+# encode_ssd.py
 import torch
-from torchvision.ops import box_convert, complete_box_iou
+from torchvision.ops import complete_box_iou
 from typing import Tuple
 
 
-def encode_ssd(priors_cxcywh: torch.Tensor,
-               priors_xyxy: torch.Tensor,
-               gt_boxes_xyxy: torch.Tensor,
-               gt_labels: torch.Tensor,
-               iou_thresh: float = 0.5,
-               background_class: int = 0,
-               variances: Tuple[float, float] = (0.1, 0.2),
-               ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Inputs
-        priors_cxcywh: priors in 'cxcywh' format (8732 in total)
-        priors_xyxy: priors in 'xyxy' format (8732 in total)
-        variances: (center, size) (both should be positive)
-        gt_boxes_xyxy: Ground truth (GT) bounding boxes tensor in 'xyxy' format
-        gt_labels: Tensor containing labels (0, 1, ..., C-2, where C is the total
-                   number of classes, including background) corresponding to GT boxes
-        background_class: integer denoting background class, must be 0
+def encode_ssd(
+    priors_cxcywh: torch.Tensor,
+    priors_xyxy: torch.Tensor,
+    gt_boxes_xyxy: torch.Tensor,
+    gt_labels: torch.Tensor,
+    iou_thresh: float = 0.5,
+    background_class: int = 0,
+    variances: Tuple[float, float] = (0.1, 0.2),
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    SSD target encoding for one image.
 
-        Returns:
-        loc_target: [P,4] (tx,ty,tw,th) per prior (positives encoded, negatives filled too)
-        cls_target: [P]   background for negatives, matched GT label for positives
-        pos_mask:   [P]   boolean positives
-        matched_gt_cxcywh: [P,4] GT boxes matched to each prior (cxcywh, normalized)
-        (P is the number of priors, 8732)
-        """
+    Inputs
+    priors_cxcywh: [P, 4] priors in cxcywh format
+    priors_xyxy:   [P, 4] priors in xyxy format
+    gt_boxes_xyxy: [G, 4] normalized GT boxes in xyxy format
+    gt_labels:     [G]    GT labels in {0, ..., num_foreground_classes - 1}
+    iou_thresh: matching threshold
+    background_class: must be 0
+    variances: (center_var, size_var)
 
-        # only works if background_class = 0
-        if background_class != 0:
-            raise ValueError(f"Background should be 0, recieved {background_class}.")
-        
-        device = priors_cxcywh.device
-        dtype  = priors_cxcywh.dtype
+    Returns
+    loc_pos:   [N_pos, 4] encoded offsets only for positive priors
+    cls_target:[P]        class targets, with 0 reserved for background
+    pos_mask:  [P]        boolean mask of positives
+    """
+    if background_class != 0:
+        raise ValueError(f"background_class must be 0, got {background_class}")
+    if not (0.0 < iou_thresh < 1.0):
+        raise ValueError(f"iou_thresh must be in (0, 1), got {iou_thresh}")
 
-        G = gt_boxes_xyxy.shape[0]
-        P = priors_cxcywh.shape[0]
+    device = priors_cxcywh.device
+    dtype = priors_cxcywh.dtype
+    P = priors_cxcywh.shape[0]
+    G = gt_boxes_xyxy.shape[0]
 
-        # Edge case: no GT in the image
-        if G == 0:
-            cls_target = torch.full((P,), background_class, dtype=gt_labels.dtype, device=device)
-            loc_target = torch.zeros((P, 4), dtype=dtype, device=device)
-            pos_mask   = torch.zeros((P,), dtype=torch.bool, device=device)
-            matched_gt_cxcywh = torch.zeros((P, 4), dtype=dtype, device=device)
-            return loc_target, cls_target, pos_mask, matched_gt_cxcywh
+    gt_labels = gt_labels.to(dtype=torch.long)
 
-        # IoU and matching
-        iou = complete_box_iou(priors_xyxy, gt_boxes_xyxy)           # [P,G]
-        # Force bipartite matches: each GT gets its best prior
-        best_prior_per_gt = iou.argmax(dim=0)                # [G]
-        iou[best_prior_per_gt, torch.arange(G, device=device)] = 2.0
+    # Empty image: all priors are background, no localization targets.
+    if G == 0:
+        cls_target = torch.zeros((P,), dtype=torch.long, device=device)
+        pos_mask = torch.zeros((P,), dtype=torch.bool, device=device)
+        loc_pos = torch.zeros((0, 4), dtype=dtype, device=device)
+        return loc_pos, cls_target, pos_mask
 
-        best_gt_per_prior  = iou.argmax(dim=1)               # [P]
-        best_iou_per_prior = iou.gather(1, best_gt_per_prior.view(-1,1)).squeeze(1)
-        pos_mask = best_iou_per_prior >= iou_thresh
+    # Standard SSD matching uses plain IoU.
+    iou = complete_box_iou(priors_xyxy, gt_boxes_xyxy)  # [P, G]
 
-        # matched_gt_xyxy  = gt_boxes_xyxy[best_gt_per_prior]  # [P,4]
-        gt_boxes_cxcywh = box_convert(boxes=gt_boxes_xyxy, in_fmt='xyxy', out_fmt='cxcywh')
-        matched_gt_cxcywh = gt_boxes_cxcywh[best_gt_per_prior]  # [P,4]
+    # Force bipartite matches so every GT gets at least one prior.
+    best_prior_per_gt = iou.argmax(dim=0)  # [G]
+    iou[best_prior_per_gt, torch.arange(G, device=device)] = 2.0
 
-        # Encode offsets (inverse of SSD decode)
-        v_c, v_s = variances
-        t_xy = (matched_gt_cxcywh[:, :2] - priors_cxcywh[:, :2]) / priors_cxcywh[:, 2:] / v_c
-        t_wh = torch.log(
-            (matched_gt_cxcywh[:, 2:] / priors_cxcywh[:, 2:]).clamp(min=1e-12)
-        ) / v_s
+    # Best GT for each prior.
+    best_iou_per_prior, best_gt_per_prior = iou.max(dim=1)  # both [P]
+    pos_mask = best_iou_per_prior >= iou_thresh
 
-        loc_target = torch.empty_like(priors_cxcywh)
-        loc_target[:, :2] = t_xy
-        loc_target[:, 2:] = t_wh
+    # Classification targets for all priors.
+    matched_labels = gt_labels[best_gt_per_prior]  # [P]
+    cls_target = torch.zeros((P,), dtype=torch.long, device=device)
+    cls_target[pos_mask] = matched_labels[pos_mask] + 1  # reserve 0 for background
 
-        # Class targets
-        matched_labels = gt_labels[best_gt_per_prior]        # [P]
-        cls_target = torch.full((P,), background_class, dtype=matched_labels.dtype, device=device)
-        cls_target[pos_mask] = matched_labels[pos_mask] + 1  # shift by 1 because 0 is reserved for 'background'
+    # Localization targets only for positives.
+    pos_idx = pos_mask.nonzero(as_tuple=False).squeeze(1)  # [N_pos]
+    priors_pos = priors_cxcywh[pos_idx]                    # [N_pos, 4]
+    gt_xyxy_pos = gt_boxes_xyxy[best_gt_per_prior[pos_idx]]  # [N_pos, 4]
 
-        return loc_target, cls_target, pos_mask, matched_gt_cxcywh
+    gt_cxy = 0.5 * (gt_xyxy_pos[:, :2] + gt_xyxy_pos[:, 2:])
+    gt_wh = gt_xyxy_pos[:, 2:] - gt_xyxy_pos[:, :2]
+
+    v_c, v_s = variances
+    t_xy = (gt_cxy - priors_pos[:, :2]) / priors_pos[:, 2:] / v_c
+    t_wh = torch.log((gt_wh / priors_pos[:, 2:]).clamp_min(1e-12)) / v_s
+    loc_pos = torch.cat((t_xy, t_wh), dim=1)  # [N_pos, 4]
+
+    return loc_pos, cls_target, pos_mask
