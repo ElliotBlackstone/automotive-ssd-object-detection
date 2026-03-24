@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 import time
 
-from SSD_from_scratch import mySSD
+from .SSD_from_scratch import mySSD
 
 
 
@@ -61,6 +61,8 @@ def SSD_train_step(model: mySSD,
     for batch, (images, targets) in enumerate(dataloader):
         # move images, targets to device
         if timing:
+            if device == "cuda":
+                torch.cuda.synchronize()
             t0_to_device = time.perf_counter()
 
         images = images.to(device, non_blocking=True)
@@ -69,24 +71,32 @@ def SSD_train_step(model: mySSD,
                 targets[i][key] = targets[i][key].to(device=device, non_blocking=True)
         
         if timing:
+            if device == "cuda":
+                torch.cuda.synchronize()
             t1_to_device = time.perf_counter()
-            time_device += t1_to_device - t0_to_device
+            time_device += (t1_to_device - t0_to_device)
 
         
         # forward pass
         if timing:
+            if device == "cuda":
+                torch.cuda.synchronize()
             t0_forward = time.perf_counter()
 
         loc_all, conf_all = model(images)
 
         if timing:
-            t1_forward = time.perf_counter()
-            time_forward += t1_forward - t0_forward
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                t1_forward = time.perf_counter()
+                time_forward += (t1_forward - t0_forward)
         
         B, P, C = conf_all.shape          # B - batch size, P - number of priors (8732), C - number of classes
 
         # -------- 1) Build per-image targets via encode() --------
         if timing:
+            if device == "cuda":
+                torch.cuda.synchronize()
             t0_build_tar = time.perf_counter()
         
         pos_mask, loc_t_pm, cls_t = build_targets(model=model,
@@ -97,8 +107,10 @@ def SSD_train_step(model: mySSD,
                                                   device=device)
         
         if timing:
+            if device == "cuda":
+                torch.cuda.synchronize()
             t1_build_tar = time.perf_counter()
-            time_build_tar += t1_build_tar - t0_build_tar
+            time_build_tar += (t1_build_tar - t0_build_tar)
         
         # number of positives per image (avoid zero division)
         num_pos_per_img = pos_mask.sum(dim=1)                    # [B]
@@ -189,9 +201,12 @@ def SSD_test_step(model: mySSD,
 
     # timing
     batch_count = 0
+    time_device = 0
+    time_build_tar = 0
+    time_forward = 0
+    time_loss = 0
     time_pred = 0
     time_mAP = 0
-    time_build_tar = 0
 
     map_metric = MeanAveragePrecision(box_format='xyxy', iou_type='bbox', iou_thresholds=[0.50], class_metrics=True).to(device)
     map_metric.reset()
@@ -200,15 +215,40 @@ def SSD_test_step(model: mySSD,
     with torch.inference_mode():
         # loop through dataloader batches
         for batch, (images, targets) in enumerate(dataloader):
+            if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                t0_to_device = time.perf_counter()
+
             images = images.to(device, non_blocking=True)
             for i in range(len(targets)):
                 for key in targets[i]:
                     targets[i][key] = targets[i][key].to(device=device, non_blocking=True)
+            
+            if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                t1_to_device = time.perf_counter()
+                time_device += (t1_to_device - t0_to_device)
+
+            #forward pass
+            if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                t0_forward = time.perf_counter()
 
             loc_all, conf_all = model(images)
 
+            if timing:
+                    if device == "cuda":
+                        torch.cuda.synchronize()
+                    t1_forward = time.perf_counter()
+                    time_forward += (t1_forward - t0_forward)
+
             # ---------- Build targets (same as train) ----------
             if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
                 t0_build_tar = time.perf_counter()
 
             pos_mask, loc_t_pm, cls_t = build_targets(model=model,
@@ -219,14 +259,20 @@ def SSD_test_step(model: mySSD,
                                                       device=device)
             
             if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
                 t1_build_tar = time.perf_counter()
-                time_build_tar += t1_build_tar - t0_build_tar
+                time_build_tar += (t1_build_tar - t0_build_tar)
         
             # number of positives per image (avoid zero division)
             num_pos_per_img = pos_mask.sum(dim=1)                    # [N]
             total_pos = num_pos_per_img.sum().clamp_min(1).float()   # scalar
 
             # ---------- Losses (no backward) ----------
+            if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                t0_loss = time.perf_counter()
             # Localization: SmoothL1 on positives only
             batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos
 
@@ -238,6 +284,12 @@ def SSD_test_step(model: mySSD,
                                                   total_pos=total_pos,
                                                   neg_pos_ratio=neg_pos_ratio)
             
+            if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize(device)
+                t1_loss = time.perf_counter()
+                time_loss += (t1_loss - t0_loss)
+            
             batch_total_loss = batch_loc_loss + batch_conf_loss
 
             loc_loss += batch_loc_loss.item()
@@ -245,6 +297,8 @@ def SSD_test_step(model: mySSD,
             test_loss += batch_total_loss.item()
 
             if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
                 t0_pred = time.perf_counter()
 
             preds = model.predict(images=images,
@@ -256,10 +310,24 @@ def SSD_test_step(model: mySSD,
                                   pre_conf_all=conf_all)
 
             if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
                 t1_pred = time.perf_counter()
-                time_pred += t1_pred - t0_pred
+                time_pred += (t1_pred - t0_pred)
+
+            if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                t0_mAP_update = time.perf_counter()
 
             map_metric.update(preds=preds, target=targets)
+
+            if timing:
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                t1_mAP_update = time.perf_counter()
+                time_mAP += (t1_mAP_update - t0_mAP_update)
+
             batch_count += 1
 
 
@@ -269,17 +337,24 @@ def SSD_test_step(model: mySSD,
     test_loss = test_loss / len(dataloader)
 
     if timing:
+        if device == "cuda":
+            torch.cuda.synchronize()
         t0_mAP = time.perf_counter()
     
     mAP = map_metric.compute()
 
     if timing:
+        if device == "cuda":
+            torch.cuda.synchronize()
         t1_mAP = time.perf_counter()
-        time_mAP += t1_mAP - t0_mAP
+        time_mAP += (t1_mAP - t0_mAP)
 
-    time_dict = {"model prediction": time_pred/batch_count,
-                 "mAP time": time_mAP,
-                 "build targets": time_build_tar/batch_count,}
+    time_dict = {"to device": time_device/batch_count,
+                 "model forward": time_forward/batch_count,
+                 "build targets": time_build_tar/batch_count,
+                 "compute loss": time_loss/batch_count,
+                 "model.predict": time_pred/batch_count,
+                 "mAP time": time_mAP,}
 
     return {"testing loss": test_loss, "localization loss": loc_loss, "classification loss": conf_loss, "mAP": mAP, "timing": time_dict} #, outputs
 

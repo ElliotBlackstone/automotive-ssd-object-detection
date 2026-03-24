@@ -100,11 +100,11 @@ class ImageClass(Dataset):
             rows = rows[rows["class"].notna()]
 
             # vectorized labels
-            labels = torch.as_tensor(rows["class"].to_numpy(), dtype=torch.int64)
+            labels = torch.tensor(rows["class"].to_numpy(), dtype=torch.int64)
 
             # vectorized boxes
             box_cols = ["xmin", "ymin", "xmax", "ymax"]
-            boxes_np = rows[box_cols].to_numpy(dtype="float32", copy=False)
+            boxes_np = rows[box_cols].to_numpy(dtype="float32", copy=True)
             boxes = torch.from_numpy(boxes_np)  # [N,4], float32
 
             boxes = tv_tensors.BoundingBoxes(
