@@ -12,24 +12,28 @@ from .CELoss_w_neg_mining import CELoss_w_neg_mining
 def SSD_test_step(model: mySSD,
                   dataloader: torch.utils.data.DataLoader,
                   iou_thresh: float = 0.5,
+                  iou_variant: str = "IoU",
                   neg_pos_ratio: float = 3.0,
                   score_thresh: float = 0.05,
                   nms_thresh: float = 0.5,
                   max_detections_per_img: int = 100,
                   device: str = 'cpu',
                   timing: bool = False,
+                  compute_mAP: bool = False,
                   ) -> Dict:
     """
     Inputs
     model: mySSD class model to be tested
     dataloader: Data on which the model is to be tested
     iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
+    iou_variant: string that must be on of "IoU", "GIoU", "DIoU", "CIoU"
     neg_pos_ration: Negative to positive ratio for hard negative mining, float greater than 0.
     score_thresh:
     nms_thresh:
     max_detections_per_img:
     device: 'cpu' or 'cuda'
     timing: Boolean for enabling/disabling timing
+    compute_mAP: True - compute mAP, False - skip
 
     Outputs
     Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
@@ -54,8 +58,9 @@ def SSD_test_step(model: mySSD,
     time_pred = 0.0
     time_mAP = 0.0
 
-    map_metric = MeanAveragePrecision(box_format='xyxy', iou_type='bbox', iou_thresholds=[0.50], class_metrics=True).to(device)
-    map_metric.reset()
+    if compute_mAP:
+        map_metric = MeanAveragePrecision(box_format='xyxy', iou_type='bbox', iou_thresholds=[0.50], class_metrics=True).to(device)
+        map_metric.reset()
 
     # turn on inference mode
     with torch.inference_mode():
@@ -94,7 +99,8 @@ def SSD_test_step(model: mySSD,
                                                       H=images.shape[-2],
                                                       W=images.shape[-1],
                                                       iou_thresh=iou_thresh,
-                                                      variances=(model.variance_center, model.variance_size))
+                                                      variances=(model.variance_center, model.variance_size),
+                                                      iou_variant=iou_variant)
             
             if timing:
                 if device.type == "cuda":
@@ -132,9 +138,9 @@ def SSD_test_step(model: mySSD,
 
                 # Classification: cross-entropy with hard-negative mining
                 batch_conf_loss = CELoss_w_neg_mining(conf_all=conf_all,
-                                                    cls_t=cls_t,
-                                                    pos_mask=pos_mask,
-                                                    neg_pos_ratio=neg_pos_ratio)
+                                                      cls_t=cls_t,
+                                                      pos_mask=pos_mask,
+                                                      neg_pos_ratio=neg_pos_ratio)
                 
                 if timing:
                     if device.type == "cuda":
@@ -156,6 +162,7 @@ def SSD_test_step(model: mySSD,
             preds = model.predict(images=images,
                                   score_thresh=score_thresh,
                                   nms_thresh=nms_thresh,
+                                  iou_variant=iou_variant,
                                   max_per_img=max_detections_per_img,
                                   class_agnostic=False,
                                   pre_loc_all=loc_all,
@@ -172,7 +179,8 @@ def SSD_test_step(model: mySSD,
                     torch.cuda.synchronize(device)
                 t0_mAP_update = time.perf_counter()
 
-            map_metric.update(preds=preds, target=targets)
+            if compute_mAP:
+                map_metric.update(preds=preds, target=targets)
 
             if timing:
                 if device.type == "cuda":
@@ -192,7 +200,8 @@ def SSD_test_step(model: mySSD,
             torch.cuda.synchronize(device)
         t0_mAP = time.perf_counter()
     
-    mAP = map_metric.compute()
+    if compute_mAP:
+        mAP = map_metric.compute()
 
     if timing:
         if device.type == "cuda":
@@ -205,6 +214,10 @@ def SSD_test_step(model: mySSD,
                  "build targets": time_build_tar/batch_count,
                  "compute loss": time_loss/batch_count,
                  "model.predict": time_pred/batch_count,
-                 "mAP time": time_mAP,}
+                 "mAP time": time_mAP if compute_mAP else 0.0,}
 
-    return {"testing loss": test_loss, "localization loss": loc_loss, "classification loss": conf_loss, "mAP": mAP, "timing": time_dict}
+    return {"testing loss": test_loss,
+            "localization loss": loc_loss,
+            "classification loss": conf_loss,
+            "mAP": mAP if compute_mAP else 0.0,
+            "timing": time_dict}

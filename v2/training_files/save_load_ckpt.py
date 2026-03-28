@@ -18,7 +18,7 @@ def save_checkpoint(epoch: int,
                     loss_dict: Dict,
                     optimizer: torch.optim.Optimizer,
                     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-                    scaler = None,
+                    scaler: torch.amp.GradScaler | None = None,
                     best_metric: float | None = None,
                     outdir: str | Path = "checkpoints",
                     tag: str = "last",               # "last", "best", "epoch_010", etc.
@@ -65,7 +65,7 @@ def load_checkpoint(path: str | Path,
                     model: torch.nn.Module,
                     optimizer: torch.optim.Optimizer | None = None,
                     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-                    scaler = None,
+                    scaler: torch.amp.GradScaler | None = None,
                     map_location: str = "cpu",
                     ):
     """

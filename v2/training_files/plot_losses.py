@@ -57,9 +57,7 @@ def plot_losses(losses: Dict, figsize=(10, 8)) -> None:
     ax.legend()
 
     # (2) mAP
-    mAP = []
-    for i in range(len(losses['mAP'])):
-        mAP.append(losses['mAP'][i]['map_50'])
+    mAP = [d.get('map_50', 0.0) for d in losses['mAP']]
     
     ax = axes[0,1]
     ax.plot(x, mAP, label="mAP")

@@ -1,18 +1,18 @@
 # encode_ssd.py
 import torch
-from torchvision.ops import complete_box_iou
+from torchvision.ops import complete_box_iou, box_iou, distance_box_iou, generalized_box_iou
 from typing import Tuple
 
 
-def encode_ssd(
-    priors_cxcywh: torch.Tensor,
-    priors_xyxy: torch.Tensor,
-    gt_boxes_xyxy: torch.Tensor,
-    gt_labels: torch.Tensor,
-    iou_thresh: float = 0.5,
-    background_class: int = 0,
-    variances: Tuple[float, float] = (0.1, 0.2),
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def encode_ssd(priors_cxcywh: torch.Tensor,
+               priors_xyxy: torch.Tensor,
+               gt_boxes_xyxy: torch.Tensor,
+               gt_labels: torch.Tensor,
+               iou_thresh: float = 0.5,
+               background_class: int = 0,
+               variances: Tuple[float, float] = (0.1, 0.2),
+               iou_variant: str = "IoU",
+               ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     SSD target encoding for one image.
 
@@ -24,6 +24,7 @@ def encode_ssd(
     iou_thresh: matching threshold
     background_class: must be 0
     variances: (center_var, size_var)
+    iou_variant: string that must be on of "IoU", "GIoU", "DIoU", "CIoU"
 
     Returns
     loc_pos:   [N_pos, 4] encoded offsets only for positive priors
@@ -50,7 +51,7 @@ def encode_ssd(
         return loc_pos, cls_target, pos_mask
 
     # Standard SSD matching uses plain IoU.
-    iou = complete_box_iou(priors_xyxy, gt_boxes_xyxy)  # [P, G]
+    iou = compute_box_metric(priors_xyxy, gt_boxes_xyxy, iou_variant)  # [P, G]
 
     # Force bipartite matches so every GT gets at least one prior.
     best_prior_per_gt = iou.argmax(dim=0)  # [G]
@@ -79,3 +80,32 @@ def encode_ssd(
     loc_pos = torch.cat((t_xy, t_wh), dim=1)  # [N_pos, 4]
 
     return loc_pos, cls_target, pos_mask
+
+
+def compute_box_metric(
+    boxes1: torch.Tensor,
+    boxes2: torch.Tensor,
+    variant: str = "IoU",
+) -> torch.Tensor:
+    """
+    Compute pairwise box metric between boxes1 and boxes2.
+
+    Args:
+        boxes1: Tensor[N, 4] in xyxy format
+        boxes2: Tensor[M, 4] in xyxy format
+        variant: one of {"IoU", "GIoU", "DIoU", "CIoU"}
+
+    Returns:
+        Tensor[N, M] of pairwise scores
+    """
+
+    key = variant.strip().upper()
+
+    metric_fns = {
+        "IOU": box_iou,
+        "GIOU": generalized_box_iou,
+        "DIOU": distance_box_iou,
+        "CIOU": complete_box_iou,
+    }
+
+    return metric_fns[key](boxes1, boxes2)

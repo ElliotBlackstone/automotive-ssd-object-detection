@@ -100,7 +100,7 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # desktop, laptop, ubuntu
-    machine = 'ubuntu'
+    machine = 'desktop'
 
     # Setup path to data folder
     if machine == 'laptop':
@@ -169,16 +169,21 @@ if __name__ == "__main__":
                         optimizer_ctor=optimizer_ctor,
                         scheduler_ctor=scheduler_ctor,
                         scaler_ctor=scaler_ctor,
-                        batch_size=8,
+                        batch_size=32,
                         device=device)
     
     for k in results:
         print(k)
 
+# batch size 4 winner:
+# {'num_workers': 12, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 6, 'multiprocessing_context': 'spawn',
+# 'samples_per_sec': 59.88141474129362, 'median_step_time_s': 0.06672649999381974, 'median_fetch_time_s': 0.0002013499615713954,
+# 'median_h2d_time_s': 0.0005157999985385686, 'median_compute_time_s': 0.06598630000371486}
+
 # batch size 8 winner:
-# {'num_workers': 8, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 4, 'multiprocessing_context': None,
-# 'samples_per_sec': 62.70258121397169, 'median_step_time_s': 0.12385257000096317, 'median_fetch_time_s': 0.0003562419988156762,
-# 'median_h2d_time_s': 0.0010370874997533974, 'median_compute_time_s': 0.12244635399929393}
+# {'num_workers': 2, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 2, 'multiprocessing_context': 'spawn',
+# 'samples_per_sec': 70.39326871493635, 'median_step_time_s': 0.1124744999979157, 'median_fetch_time_s': 0.00022839999292045832,
+# 'median_h2d_time_s': 0.0008753000292927027, 'median_compute_time_s': 0.11142639999161474}
 
 # batch size 16 winner:
 # {'num_workers': 2, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 2, 'multiprocessing_context': None,

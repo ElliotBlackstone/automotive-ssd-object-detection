@@ -29,42 +29,7 @@ def CELoss_w_neg_mining(conf_all: torch.Tensor,
     Scalar tensor:
         (sum of positive CE + sum of selected negative CE) / max(total_positives, 1)
     """
-    # ---------- basic validation ----------
-    if conf_all.ndim != 3:
-        raise ValueError(f"conf_all must have shape [B, P, C], got {tuple(conf_all.shape)}")
-
     B, P, C = conf_all.shape
-
-    if cls_t.shape != (B, P):
-        raise ValueError(f"cls_t must have shape {(B, P)}, got {tuple(cls_t.shape)}")
-
-    if pos_mask.shape != (B, P):
-        raise ValueError(f"pos_mask must have shape {(B, P)}, got {tuple(pos_mask.shape)}")
-
-    if neg_pos_ratio < 0:
-        raise ValueError(f"neg_pos_ratio must be nonnegative, got {neg_pos_ratio}")
-
-    if empty_image_negatives < 0:
-        raise ValueError(
-            f"empty_image_negatives must be nonnegative, got {empty_image_negatives}"
-        )
-
-    if cls_t.device != conf_all.device:
-        raise ValueError("cls_t and conf_all must be on the same device")
-
-    if pos_mask.device != conf_all.device:
-        raise ValueError("pos_mask and conf_all must be on the same device")
-
-    if cls_t.dtype != torch.long:
-        cls_t = cls_t.long()
-
-    if pos_mask.dtype != torch.bool:
-        pos_mask = pos_mask.bool()
-
-    # Optional sanity check: matched priors should not be background.
-    # Remove this if your pipeline intentionally allows otherwise.
-    if torch.any(cls_t[pos_mask] == 0):
-        raise ValueError("pos_mask contains entries whose class target is background (0)")
 
     # ---------- per-prior CE ----------
     ce = torch.nn.functional.cross_entropy(

@@ -100,11 +100,12 @@ class ImageClass(Dataset):
             rows = rows[rows["class"].notna()]
 
             # vectorized labels
-            labels = torch.as_tensor(rows["class"].to_numpy(), dtype=torch.int64)
+            labels_np = rows["class"].to_numpy(dtype=np.int64, copy=True)
+            labels = torch.from_numpy(labels_np)
 
             # vectorized boxes
             box_cols = ["xmin", "ymin", "xmax", "ymax"]
-            boxes_np = rows[box_cols].to_numpy(dtype="float32", copy=False)
+            boxes_np = rows[box_cols].to_numpy(dtype="float32", copy=True)
             boxes = torch.from_numpy(boxes_np)  # [N,4], float32
 
             boxes = tv_tensors.BoundingBoxes(
@@ -441,7 +442,7 @@ def make_train_test_split(full_set: ImageClass,
 
         Inputs:
         full_set - ImageClass file to be train/test splitted
-        test_size - float between 0 and 1 that determines the size of the training and testing sets
+        test_size - float between 0 and 0.5 that determines the size of the training and testing sets
         rand_state - integer for random state reproducability
         transform_train - torchvision v2 transforms for training set
         transform_test - torchvision v2 transforms for testing set
@@ -451,8 +452,8 @@ def make_train_test_split(full_set: ImageClass,
         testing ImageClass file of size len(full_set) * test_size
         """
 
-        if (test_size <= 0 ) or (test_size >= 1):
-            raise ValueError(f"Test size should be a number between 0 and 1, recieved {test_size}.")
+        if (test_size <= 0 ) or (test_size > 0.5):
+            raise ValueError(f"Test size should be a number between 0 and 0.5, recieved {test_size}.")
         
         # df of original ImageClass file
         df = full_set.annotate_df

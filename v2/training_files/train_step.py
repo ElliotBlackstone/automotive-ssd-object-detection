@@ -17,6 +17,7 @@ def SSD_train_step(model: mySSD,
                    timing: bool = False,
                    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
                    scaler: torch.amp.GradScaler | None = None,
+                   iou_variant: str = "IoU",
                    ) -> Dict:
     """
     Inputs
@@ -27,6 +28,9 @@ def SSD_train_step(model: mySSD,
     neg_pos_ratio: Negative to positive ratio for hard negative mining, float greater than 0.
     device: 'cpu' or 'cuda'
     timing: Boolean for enabling/disabling timing
+    scheduler:
+    scaler:
+    iou_variant: string that must be on of "IoU", "GIoU", "DIoU", "CIoU"
 
     Outputs
     Dictonary with localization loss, classification loss, total loss (sum of loc+cls loss), timing results
@@ -88,7 +92,8 @@ def SSD_train_step(model: mySSD,
                                                   H=images.shape[-2],
                                                   W=images.shape[-1],
                                                   iou_thresh=iou_thresh,
-                                                  variances=(model.variance_center, model.variance_size))
+                                                  variances=(model.variance_center, model.variance_size),
+                                                  iou_variant=iou_variant)
         
         if timing:
             if device.type == "cuda":

@@ -9,6 +9,7 @@ from collections import OrderedDict
 
 from .create_default_boxes import create_default_boxes
 from .decode_ssd import decode_ssd
+from .nms_variant import run_nms_by_variant
 
 
 
@@ -281,6 +282,7 @@ class mySSD(nn.Module):
                 images: torch.Tensor,
                 score_thresh: float = 0.2,
                 nms_thresh: float = 0.5,
+                iou_variant: str = "IoU",
                 max_per_img: int = 100,
                 class_agnostic: bool = False,
                 pre_loc_all: torch.Tensor | None = None,
@@ -291,6 +293,7 @@ class mySSD(nn.Module):
         images: Tensor of size [B, 3, 300, 300]
         score_thresh: Float between 0 and 1 determining the score threshold for kept predictions
         nms_thresh: Float between 0 and 1 determining the non-maximum suppression threshold
+        iou_variant: string that must be on of "IoU", "GIoU", "DIoU", "CIoU"
         max_per_img: Integer denoting the max amount of predictions per image
         class_agnostic: Boolean
         pre_loc_all: Tensor of size [B, P, 4], pre computation of loc_all, _ = self(images)
@@ -375,15 +378,13 @@ class mySSD(nn.Module):
             sel_labels0 = best_label0[keep]  # [M], 0-based foreground labels
 
             # NMS
-            if class_agnostic:
-                keep_nms = gen_nms.ops.diou_nms(boxes=sel_boxes,
-                                            scores=sel_scores,
-                                            diou_threshold=nms_thresh)
-            else:
-                keep_nms = gen_nms.ops.batched_diou_nms(boxes=sel_boxes,
-                                                    scores=sel_scores,
-                                                    idxs=sel_labels0,
-                                                    diou_threshold=nms_thresh)
+            keep_nms = run_nms_by_variant(boxes=sel_boxes,
+                                          scores=sel_scores,
+                                          nms_thresh=nms_thresh,
+                                          variant=iou_variant,
+                                          class_agnostic=class_agnostic,
+                                          idxs=None if class_agnostic else sel_labels0,
+                                          )
 
             keep_nms = keep_nms[:max_per_img]
 

@@ -18,6 +18,7 @@ def SSD_train(model: torch.nn.Module,
               scaler: torch.amp.GradScaler | None = None,
               sched_step_w_opt: bool = False,
               iou_thresh: float = 0.5,
+              iou_variant: str = "IoU",
               neg_pos_ratio: float = 3.0,
               score_thresh: float = 0.05,
               nms_thresh: float = 0.5,
@@ -31,6 +32,7 @@ def SSD_train(model: torch.nn.Module,
               SAVE_DIR: Path | None = None,
               timing: bool = False,
               past_train_dict: Dict | None = None,
+              compute_mAP: bool = False,
               ) -> Dict:
     """
     Inputs
@@ -42,6 +44,7 @@ def SSD_train(model: torch.nn.Module,
     scaler: 
     sched_step_w_opt: 
     iou_thresh: IoU threshold for prior/ground truth overlap, float between 0 and 1.
+    iou_variant: string that must be on of "IoU", "GIoU", "DIoU", "CIoU"
     neg_pos_ratio: Negative to positive ratio for hard negative mining, float greater than 0.
     score_thresh: 
     nms_thresh: 
@@ -57,6 +60,7 @@ def SSD_train(model: torch.nn.Module,
     SAVE_DIR: File path to save location
     timing: Boolean for enabling/disabling timing
     past_train_dict: Dictionary or None.  If not None, dictionary of past training results.
+    compute_mAP: True - compute mAP, False - skip
 
     Outputs
     Dictonary with train+test localization loss, train+test classification loss,
@@ -73,6 +77,11 @@ def SSD_train(model: torch.nn.Module,
     
     if save_model and SAVE_DIR is None:
         raise TypeError("If the model is to be saved, SAVE_DIR must be specified.")
+    
+    if not isinstance(iou_variant, str):
+        raise TypeError("variant must be a string")
+    if iou_variant not in ("IoU", "GIoU", "DIoU", "CIoU"):
+        raise ValueError(f"iou_variant must be one of (IoU, GIoU, DIoU, CIoU) but recieved: {iou_variant}")
     
     best_metric = None
     conseq_rounds = 0
@@ -101,6 +110,7 @@ def SSD_train(model: torch.nn.Module,
                                     dataloader=train_dataloader,
                                     optimizer=optimizer,
                                     iou_thresh=iou_thresh,
+                                    iou_variant=iou_variant,
                                     neg_pos_ratio=neg_pos_ratio,
                                     device=device,
                                     timing=timing,
@@ -111,12 +121,14 @@ def SSD_train(model: torch.nn.Module,
         test_dict = SSD_test_step(model=model,
                                   dataloader=test_dataloader,
                                   iou_thresh=iou_thresh,
+                                  iou_variant=iou_variant,
                                   neg_pos_ratio=neg_pos_ratio,
                                   nms_thresh=nms_thresh,
                                   score_thresh=score_thresh,
                                   max_detections_per_img=max_detections_per_img,
                                   device=device,
-                                  timing=timing)
+                                  timing=timing,
+                                  compute_mAP=compute_mAP,)
         
         val_err = test_dict["testing loss"]
         
@@ -126,7 +138,9 @@ def SSD_train(model: torch.nn.Module,
             else:
                 scheduler.step()
         
-        print(f"Epoch: {current_epoch}  |  mAP: {test_dict['mAP']['map_50']:.4f}  |  Train loc loss: {train_dict['localization loss']:.4f}  |  Train class loss: {train_dict['classification loss']:.4f}  |  Test loc loss: {test_dict['localization loss']:.4f}  |  Test class loss: {test_dict['classification loss']:.4f}")
+        mAP_score = test_dict['mAP']['map_50'] if compute_mAP else 0.0
+        
+        print(f"Epoch: {current_epoch}  |  mAP: {mAP_score:.4f}  |  Train loc loss: {train_dict['localization loss']:.4f}  |  Train class loss: {train_dict['classification loss']:.4f}  |  Test loc loss: {test_dict['localization loss']:.4f}  |  Test class loss: {test_dict['classification loss']:.4f}")
 
         # update results dictionary
         results['train_loss'].append(train_dict['training loss'])
@@ -141,7 +155,7 @@ def SSD_train(model: torch.nn.Module,
         results["epochs"][0] = current_epoch
 
 
-        val_metric = test_dict["mAP"]["map_50"]
+        val_metric = mAP_score
         is_better = (best_metric is None) or (val_metric > best_metric)
         if is_better:
                 best_metric = val_metric
@@ -221,14 +235,3 @@ def SSD_train(model: torch.nn.Module,
 
     # return results
     return merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results
-
-
-
-def collate_detection(batch):
-    # batch: list of (img, target) tuples
-    imgs  = [img for img, _ in batch]
-    tgts  = [tgt for _, tgt in batch]
-
-    # imgs are already float32 CxHxW tensors (or tv_tensors.Image),
-    # so stacking is enough
-    return torch.stack(imgs, dim=0), tgts

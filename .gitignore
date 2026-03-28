@@ -3,3 +3,4 @@ old files/
 app_files/SSD_app_env/
 __pycache__/
 *.mp4
+v2/saved_models/
