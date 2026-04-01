@@ -1,13 +1,13 @@
 import torch
 from torch.profiler import profile, ProfilerActivity, record_function
+from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
 from .build_targets import build_targets, build_targets_2
 from .CELoss_w_neg_mining import CELoss_w_neg_mining
 
 
 
-def profile_SSD_train(model: torch.nn.Module,
-              train_dataloader: torch.utils.data.DataLoader,
+def profile_SSD_test(model: torch.nn.Module,
               test_dataloader: torch.utils.data.DataLoader,
               optimizer: torch.optim.Optimizer,
               scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
@@ -26,8 +26,13 @@ def profile_SSD_train(model: torch.nn.Module,
     if torch.cuda.is_available():
         activities.append(ProfilerActivity.CUDA)
 
+    # put model in eval mode
+    model.eval()
     device = torch.device(device)
     use_amp = (device.type == "cuda")
+
+    map_metric = MeanAveragePrecision(box_format='xyxy', iou_type='bbox', iou_thresholds=[0.50], class_metrics=True).to(device)
+    map_metric.reset()
 
     count = 0
 
@@ -42,8 +47,8 @@ def profile_SSD_train(model: torch.nn.Module,
     ) as prof:
 
         for epoch in range(epochs):
-            for _, (images, targets) in enumerate(train_dataloader):
-                with record_function("train_iter"):
+            for _, (images, targets) in enumerate(test_dataloader):
+                with record_function("test_iter"):
                     with record_function("data_to_device"):
                         images = images.to(device, non_blocking=True)
                         targets = [{
@@ -53,55 +58,46 @@ def profile_SSD_train(model: torch.nn.Module,
                                     for t in targets]
                     
                     with record_function("build_targets"):
+                        # ---------- Build targets ----------
                         pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=model.priors,
-                                                  priors_xyxy=model.priors_xyxy,
-                                                  targets=targets,
-                                                  H=images.shape[-2],
-                                                  W=images.shape[-1],
-                                                  iou_thresh=iou_thresh,
-                                                  variances=(model.variance_center, model.variance_size),
-                                                  iou_variant=iou_variant)
+                                                                priors_xyxy=model.priors_xyxy,
+                                                                targets=targets,
+                                                                H=images.shape[-2],
+                                                                W=images.shape[-1],
+                                                                iou_thresh=iou_thresh,
+                                                                variances=(model.variance_center, model.variance_size),
+                                                                iou_variant=iou_variant)
                         # number of positives per image (avoid zero division)
-                        num_pos_per_img = pos_mask.sum(dim=1)                    # [B]
-                        total_pos = num_pos_per_img.sum().clamp_min(1).to(images.dtype)   # scalar
+                        total_pos = pos_mask.sum(dim=1).sum().clamp_min(1)
 
                     with torch.autocast(device_type="cuda", enabled=use_amp):
                         with record_function("forward"):
                             loc_all, conf_all = model(images)
 
                         with record_function("loss"):
-                            # -------- 2) Localization loss (positives only) --------
-                            batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction='sum') / total_pos
+                            batch_loc_loss = torch.nn.functional.smooth_l1_loss(loc_all[pos_mask], loc_t_pm, reduction="sum") / total_pos.to(loc_all.dtype)
 
-
-                            # -------- 3) Classification loss with hard-negative mining --------
+                            # Classification: cross-entropy with hard-negative mining
                             batch_conf_loss = CELoss_w_neg_mining(conf_all=conf_all,
                                                                 cls_t=cls_t,
                                                                 pos_mask=pos_mask,
-                                                                neg_pos_ratio=neg_pos_ratio,)
-                            batch_loss = batch_loc_loss + batch_conf_loss
+                                                                neg_pos_ratio=neg_pos_ratio)
 
                     
-                    if use_amp:
-                        with record_function("backward"):
-                            optimizer.zero_grad(set_to_none=True)
-                            scaler.scale(batch_loss).backward()
-                        old_scale = scaler.get_scale()
-                        with record_function("optimizer_step"):
-                            scaler.step(optimizer)
-                        scaler.update()
-                        new_scale = scaler.get_scale()
+                    
 
-                        if scheduler is not None and new_scale >= old_scale:
-                            scheduler.step()
-                    else:
-                        with record_function("backward"):
-                            optimizer.zero_grad(set_to_none=True)
-                            batch_loss.backward()
-                        with record_function("optimizer_step"):
-                            optimizer.step()
-                        if scheduler is not None:
-                            scheduler.step()
+                    with record_function(".predict"):
+                        preds = model.predict(images=images,
+                                    score_thresh=score_thresh,
+                                    nms_thresh=nms_thresh,
+                                    iou_variant=iou_variant,
+                                    max_per_img=max_detections_per_img,
+                                    class_agnostic=False,
+                                    pre_loc_all=loc_all,
+                                    pre_conf_all=conf_all)
+                    
+                    with record_function("mAP"):
+                        map_metric.update(preds=preds, target=targets)
 
                 prof.step()
                 count += 1
@@ -115,7 +111,7 @@ def profile_SSD_train(model: torch.nn.Module,
 
 
 
-def profile_SSD_train_2(model, train_dataloader, test_dataloader, optimizer,
+def profile_SSD_test_2(model, test_dataloader, optimizer,
                       scheduler=None, scaler=None, sched_step_w_opt=False,
                       iou_thresh=0.5, iou_variant="IoU", neg_pos_ratio=3.0,
                       score_thresh=0.05, nms_thresh=0.5,
@@ -131,6 +127,9 @@ def profile_SSD_train_2(model, train_dataloader, test_dataloader, optimizer,
     priors_xyxy   = model.priors_xyxy.to(device)
     # model = torch.compile(model, mode="reduce-overhead")
 
+    map_metric = MeanAveragePrecision(box_format='xyxy', iou_type='bbox', iou_thresholds=[0.50], class_metrics=True).to(device)
+    map_metric.reset()
+
     count = 0
 
     with profile(
@@ -144,7 +143,7 @@ def profile_SSD_train_2(model, train_dataloader, test_dataloader, optimizer,
     ) as prof:
 
         for epoch in range(epochs):
-            for images, targets in train_dataloader:
+            for images, targets in test_dataloader:
                 with record_function("train_iter"):
                     with record_function("data_to_device"):
                         images = images.to(device, non_blocking=True)
@@ -177,27 +176,20 @@ def profile_SSD_train_2(model, train_dataloader, test_dataloader, optimizer,
                                 pos_mask=pos_mask,
                                 neg_pos_ratio=neg_pos_ratio,
                             )
-                            batch_loss = batch_loc_loss + batch_conf_loss
-
-                    if use_amp:
-                        with record_function("backward"):
-                            optimizer.zero_grad(set_to_none=True)
-                            scaler.scale(batch_loss).backward()
-                        old_scale = scaler.get_scale()
-                        with record_function("optimizer_step"):
-                            scaler.step(optimizer)
-                        scaler.update()
-                        new_scale = scaler.get_scale()
-                        if scheduler is not None and new_scale >= old_scale:
-                            scheduler.step()
-                    else:
-                        with record_function("backward"):
-                            optimizer.zero_grad(set_to_none=True)
-                            batch_loss.backward()
-                        with record_function("optimizer_step"):
-                            optimizer.step()
-                        if scheduler is not None:
-                            scheduler.step()
+                            
+                    with record_function(".predict"):
+                        preds = model.predict(images=images,
+                                    score_thresh=score_thresh,
+                                    nms_thresh=nms_thresh,
+                                    iou_variant=iou_variant,
+                                    max_per_img=max_detections_per_img,
+                                    class_agnostic=False,
+                                    pre_loc_all=loc_all,
+                                    pre_conf_all=conf_all)
+                    
+                    with record_function("mAP"):
+                        map_metric.update(preds=preds, target=targets)
+                    
 
                 prof.step()
 

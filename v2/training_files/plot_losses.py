@@ -42,7 +42,7 @@ def plot_losses(losses: Dict, figsize=(10, 8)) -> None:
         raise ValueError(f"All lists must have the same length. Got lengths: {dict(zip(required, lens))}")
 
     n = lens[0]
-    x = list(range(n))
+    x = list(range(1, n+1))
 
     fig, axes = plt.subplots(2, 2, figsize=figsize, constrained_layout=True)
 

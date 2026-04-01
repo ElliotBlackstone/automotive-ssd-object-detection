@@ -5,7 +5,7 @@ from typing import Dict
 import time
 
 from ..model_files.SSD_from_scratch import mySSD
-from .build_targets import build_targets
+from .build_targets import build_targets, build_targets_2, move_targets_to_device
 from .CELoss_w_neg_mining import CELoss_w_neg_mining
 
 
@@ -65,19 +65,15 @@ def SSD_test_step(model: mySSD,
     # turn on inference mode
     with torch.inference_mode():
         # loop through dataloader batches
-        for _, (images, targets) in enumerate(dataloader):
+        for images, targets in dataloader:
             if timing:
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
                 t0_to_device = time.perf_counter()
 
-            # move images, targets to device
+            # move images to device
             images = images.to(device, non_blocking=True)
-            targets = [{
-                        "boxes": t["boxes"].to(device, non_blocking=True),
-                        "labels": t["labels"].to(device, non_blocking=True),
-                        }
-                        for t in targets]
+            targets = move_targets_to_device(targets=targets, device=device, non_blocking=True)
 
             if timing:
                 if device.type == "cuda":
@@ -93,7 +89,7 @@ def SSD_test_step(model: mySSD,
                     torch.cuda.synchronize(device)
                 t0_build_tar = time.perf_counter()
 
-            pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=model.priors,
+            pos_mask, loc_t_pm, cls_t = build_targets_2(priors_cxcywh=model.priors,
                                                       priors_xyxy=model.priors_xyxy,
                                                       targets=targets,
                                                       H=images.shape[-2],

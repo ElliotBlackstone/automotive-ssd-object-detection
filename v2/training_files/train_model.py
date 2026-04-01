@@ -3,6 +3,7 @@
 import torch
 from pathlib import Path
 import sys
+import argparse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
@@ -18,7 +19,7 @@ from v2.training_files.plot_losses import plot_losses
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # desktop, laptop, ubuntu
-machine = 'desktop'
+machine = 'ubuntu'
 
 # Setup path to data folder
 if machine == 'laptop':
@@ -26,7 +27,8 @@ if machine == 'laptop':
 elif machine == 'desktop':
     folder_path = Path(r"C:\Udacity_car_data\data")
 elif machine == 'ubuntu':
-    folder_path = Path(r"/mnt/c/Udacity_car_data/data")
+    # folder_path = Path(r"/mnt/c/Udacity_car_data/data")
+    folder_path = Path.home() / "datasets" / "Udacity_car_data" / "data"
 
 train_path = folder_path / "train"
 
@@ -38,7 +40,10 @@ ssdmodel = mySSD(class_to_idx_dict={'biker': 0, 'car': 1, 'pedestrian': 2, 'traf
                  variances=(0.1, 0.2),
                  ).to(device)
 
-train_dataloader, val_dataloader = build_train_dl(train_path=train_path)
+train_dataloader, val_dataloader = build_train_dl(train_path=train_path,
+                                                  batch_size=16,
+                                                  num_workers=4,
+                                                  prefetch_factor=4)
 
 optimizer, scheduler = build_optimizer_and_scheduler(model=ssdmodel,
                                                      train_dataloader=train_dataloader,
@@ -51,7 +56,7 @@ optimizer, scheduler = build_optimizer_and_scheduler(model=ssdmodel,
 
 scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
 
-resume_path = Path(r"C:\Users\eblac\Documents\GitHub\self-driving-car\v2\saved_models") / "last.ckpt"
+resume_path = Path.home() / "repos" / "automotive-ssd-object-detection" / "v2" / "saved_models" / "last.ckpt"
 if resume_path.exists():
     start_epoch, best_map, loss_dict = load_checkpoint(
         resume_path, ssdmodel, optimizer=optimizer, scheduler=scheduler,
@@ -61,7 +66,17 @@ if resume_path.exists():
 else:
     start_epoch, best_map, loss_dict = 0, None, None
 
-if __name__ == "__main__":
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=5,
+        help="Number of training epochs"
+    )
+    args = parser.parse_args()
+
     results = SSD_train(model=ssdmodel,
                         train_dataloader=train_dataloader,
                         test_dataloader=val_dataloader,
@@ -69,22 +84,26 @@ if __name__ == "__main__":
                         scheduler=scheduler,
                         scaler=scaler,
                         sched_step_w_opt=True,
-                        iou_thresh=0.5,
-                        iou_variant="IoU",
+                        iou_thresh=0.45,
+                        iou_variant="GIoU",
                         neg_pos_ratio=3.0,
                         score_thresh=0.2,
                         nms_thresh=0.3,
                         max_detections_per_img=200,
-                        epochs=2,
+                        epochs=args.epochs,
                         early_stopping_rounds=None,
                         device=device,
                         save_model=True,
                         save_best_model=False,
                         epoch_save_interval=None,
-                        SAVE_DIR=r"C:\Users\eblac\Documents\GitHub\self-driving-car\v2\saved_models",
+                        SAVE_DIR=Path.home() / "repos" / "automotive-ssd-object-detection" / "v2" / "saved_models",
                         timing=False,
                         past_train_dict=loss_dict,
-                        compute_mAP=False,
+                        compute_mAP=True,
                         )
 
+
     plot_losses(results)
+
+if __name__ == "__main__":
+    main()

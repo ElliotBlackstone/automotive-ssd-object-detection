@@ -1,8 +1,15 @@
 # sweep_dl_configs.py
 
 from itertools import product
-from benchmarking.bm_train import benchmark_train_loop
 import copy
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from bm_train import benchmark_train_loop
+
 
 def sweep_loader_configs(
     model,
@@ -11,7 +18,7 @@ def sweep_loader_configs(
     optimizer_ctor,
     scheduler_ctor,
     scaler_ctor,
-    batch_size=16,
+    batch_size=8,
     device="cuda",
 ):
     configs = []
@@ -20,7 +27,7 @@ def sweep_loader_configs(
     pin_memory_list = [True]
     prefetch_list = [2, 4, 6]
     persistent_list = [False]
-    mp_context_list = ["spawn"] # [None, "spawn"]
+    mp_context_list = [None] # [None, "spawn"]
 
     for nw in num_workers_list:
         for pm in pin_memory_list:
@@ -100,7 +107,7 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # desktop, laptop, ubuntu
-    machine = 'desktop'
+    machine = 'ubuntu'
 
     # Setup path to data folder
     if machine == 'laptop':
@@ -142,9 +149,11 @@ if __name__ == "__main__":
 
     model = mySSD(class_to_idx_dict=train_data.class_to_idx, in_channels=3, variances=(0.1, 0.2))
 
+    BATCH_SIZE = 16
+
     steps_per_epoch = len(DataLoader(
         train_data,
-        batch_size=16,
+        batch_size=BATCH_SIZE,
         shuffle=True,
         collate_fn=collate_detection,
     ))
@@ -163,34 +172,37 @@ if __name__ == "__main__":
     def scaler_ctor():
         return torch.amp.GradScaler("cuda", enabled=True)
 
+    
     results = sweep_loader_configs(model=model,
                         dataset=train_data,
                         collate_fn=collate_detection,
                         optimizer_ctor=optimizer_ctor,
                         scheduler_ctor=scheduler_ctor,
                         scaler_ctor=scaler_ctor,
-                        batch_size=32,
+                        batch_size=BATCH_SIZE,
                         device=device)
     
+    print(f"Batch Size: {BATCH_SIZE}")
+    print()
     for k in results:
         print(k)
 
 # batch size 4 winner:
-# {'num_workers': 12, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 6, 'multiprocessing_context': 'spawn',
-# 'samples_per_sec': 59.88141474129362, 'median_step_time_s': 0.06672649999381974, 'median_fetch_time_s': 0.0002013499615713954,
-# 'median_h2d_time_s': 0.0005157999985385686, 'median_compute_time_s': 0.06598630000371486}
+# {'num_workers': 2, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 4, 'multiprocessing_context': None,
+# 'samples_per_sec': 63.92698063891477, 'median_step_time_s': 0.06252471799962223, 'median_fetch_time_s': 0.0002491125001142791,
+# 'median_h2d_time_s': 0.0005203460000302584, 'median_compute_time_s': 0.061636413499854825}
 
 # batch size 8 winner:
-# {'num_workers': 2, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 2, 'multiprocessing_context': 'spawn',
-# 'samples_per_sec': 70.39326871493635, 'median_step_time_s': 0.1124744999979157, 'median_fetch_time_s': 0.00022839999292045832,
-# 'median_h2d_time_s': 0.0008753000292927027, 'median_compute_time_s': 0.11142639999161474}
+# {'num_workers': 12, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 4, 'multiprocessing_context': None,
+# 'samples_per_sec': 77.16178648058349, 'median_step_time_s': 0.10330096950019652, 'median_fetch_time_s': 0.00027631399962047,
+# 'median_h2d_time_s': 0.0008355845002370188, 'median_compute_time_s': 0.10164135200011515}
 
 # batch size 16 winner:
-# {'num_workers': 2, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 2, 'multiprocessing_context': None,
-# 'samples_per_sec': 66.27293273412721, 'median_step_time_s': 0.2289671910002653, 'median_fetch_time_s': 0.000471838999146712,
-# 'median_h2d_time_s': 0.002096003000588098, 'median_compute_time_s': 0.22641547749935853}
+# {'num_workers': 4, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 4, 'multiprocessing_context': None,
+# 'samples_per_sec': 81.16432461856895, 'median_step_time_s': 0.18809445600027175, 'median_fetch_time_s': 0.0004448585000318417,
+# 'median_h2d_time_s': 0.0016056390004450805, 'median_compute_time_s': 0.18600801900038277}
 
 # batch size 32 winner:
-# {'num_workers': 2, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 2, 'multiprocessing_context': None,
-# 'samples_per_sec': 60.00852509730928, 'median_step_time_s': 0.47524159850036085, 'median_fetch_time_s': 0.0006727330001012888,
-# 'median_h2d_time_s': 0.004184692500530218, 'median_compute_time_s': 0.46408135399997263}
+# {'num_workers': 4, 'pin_memory': True, 'persistent_workers': False, 'prefetch_factor': 2, 'multiprocessing_context': None,
+# 'samples_per_sec': 80.9101945561321, 'median_step_time_s': 0.3546846935000758, 'median_fetch_time_s': 0.00045518099977925885,
+# 'median_h2d_time_s': 0.0029837854999641422, 'median_compute_time_s': 0.3509303290002208}

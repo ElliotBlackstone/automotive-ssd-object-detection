@@ -138,7 +138,7 @@ def SSD_train(model: torch.nn.Module,
             else:
                 scheduler.step()
         
-        mAP_score = test_dict['mAP']['map_50'] if compute_mAP else 0.0
+        mAP_score = test_dict['mAP']['map_50'] if compute_mAP else {"no mAP": 0.0}
         
         print(f"Epoch: {current_epoch}  |  mAP: {mAP_score:.4f}  |  Train loc loss: {train_dict['localization loss']:.4f}  |  Train class loss: {train_dict['classification loss']:.4f}  |  Test loc loss: {test_dict['localization loss']:.4f}  |  Test class loss: {test_dict['classification loss']:.4f}")
 
