@@ -57,6 +57,7 @@ def bench_inference_gpu(
     pin_memory: bool = False,
     score_thresh: float = 0.3,
     nms_thresh: float = 0.5,
+    new_model: bool = False,
     max_per_img: int = 50,
     enable_cudnn_benchmark: bool = False,
     restore_training_mode: bool = True,
@@ -145,14 +146,23 @@ def bench_inference_gpu(
                 mi_gpu = _move_to_device(mi_cpu)
 
                 loc_all, conf_all = model(mi_gpu)
-                _ = model.predict(
-                    mi_gpu,
-                    score_thresh=score_thresh,
-                    nms_thresh=nms_thresh,
-                    max_per_img=max_per_img,
-                    pre_loc_all=loc_all,
-                    pre_conf_all=conf_all,
-                )
+                if new_model:
+                    _ = _ = model.predict(mi_gpu,
+                                    score_thresh=score_thresh,
+                                    nms_thresh=nms_thresh,
+                                    iou_variant="DIoU",
+                                    max_per_img=max_per_img,
+                                    pre_loc_all=loc_all,
+                                    pre_conf_all=conf_all,
+                                    )
+                else:
+                    _ = model.predict(mi_gpu,
+                                    score_thresh=score_thresh,
+                                    nms_thresh=nms_thresh,
+                                    max_per_img=max_per_img,
+                                    pre_loc_all=loc_all,
+                                    pre_conf_all=conf_all,
+                                    )
 
             torch.cuda.synchronize(device)
 
@@ -178,14 +188,23 @@ def bench_inference_gpu(
                 t3 = time.perf_counter_ns()
 
                 # 4) Postprocess
-                _ = model.predict(
-                    mi_gpu,
-                    score_thresh=score_thresh,
-                    nms_thresh=nms_thresh,
-                    max_per_img=max_per_img,
-                    pre_loc_all=loc_all,
-                    pre_conf_all=conf_all,
-                )
+                if new_model:
+                    _ = _ = model.predict(mi_gpu,
+                                          score_thresh=score_thresh,
+                                          nms_thresh=nms_thresh,
+                                          iou_variant="DIoU",
+                                          max_per_img=max_per_img,
+                                          pre_loc_all=loc_all,
+                                          pre_conf_all=conf_all,
+                                          )
+                else:
+                    _ = model.predict(mi_gpu,
+                                      score_thresh=score_thresh,
+                                      nms_thresh=nms_thresh,
+                                      max_per_img=max_per_img,
+                                      pre_loc_all=loc_all,
+                                      pre_conf_all=conf_all,
+                                      )
                 torch.cuda.synchronize(device)
                 t4 = time.perf_counter_ns()
 
@@ -221,7 +240,7 @@ def bench_inference_gpu(
             f"[warn] end_to_end mean ({out['end_to_end'].mean_ms:.3f} ms) "
             f"!= sum of stage means ({sum_means:.3f} ms)."
         )
-        print("       Small differences can still occur from Python overhead between stage boundaries.")
+        print("Small differences can still occur from Python overhead between stage boundaries.")
 
     return out
 

@@ -109,15 +109,15 @@ def build_train_dl(train_path: Path,
     train_data = ImageClass(targ_dir=train_path, file_list=biglist, transform=train_tfms, file_pct=1, rand_seed=724, include_area=False)
 
     train_dataloader = DataLoader(train_data, 
-                              batch_size=batch_size, 
-                              shuffle=True, 
-                              num_workers=num_workers,
-                              persistent_workers=True,
-                              prefetch_factor=prefetch_factor,
-                              pin_memory=True,
-                              collate_fn=collate_detection,
-                              multiprocessing_context=None,
-                              )
+                                  batch_size=batch_size, 
+                                  shuffle=True, 
+                                  num_workers=num_workers,
+                                  persistent_workers=True,
+                                  prefetch_factor=prefetch_factor,
+                                  pin_memory=True,
+                                  collate_fn=collate_detection,
+                                  multiprocessing_context=None,
+                                  )
 
     val_dataloader = DataLoader(val_data, 
                                 batch_size=batch_size, 
@@ -135,7 +135,11 @@ def build_train_dl(train_path: Path,
 
 
 
-def build_test_dl(test_path: Path) -> DataLoader:
+def build_test_dl(test_path: Path,
+                  batch_size: int = 8,
+                  num_workers: int = 2,
+                  prefetch_factor: int = 2,
+                  ) -> DataLoader:
 
     test_tfms = v2.Compose([
     v2.ToImage(),
@@ -148,13 +152,13 @@ def build_test_dl(test_path: Path) -> DataLoader:
     test_data = ImageClass(targ_dir=test_path, transform=test_tfms, file_pct=1)
 
     test_dataloader = DataLoader(test_data, 
-                             batch_size=8, 
-                             shuffle=False, 
-                             num_workers=2,
-                             persistent_workers=True,
-                             prefetch_factor=2,
-                             pin_memory=False,
-                             collate_fn=collate_detection,
-                             )
+                                 batch_size=batch_size,
+                                 shuffle=False, 
+                                 num_workers=num_workers,
+                                 persistent_workers=True,
+                                 prefetch_factor=prefetch_factor,
+                                 pin_memory=False,
+                                 collate_fn=collate_detection,
+                                 )
 
     return test_dataloader

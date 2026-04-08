@@ -11,7 +11,7 @@ import torch
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from SSD_from_scratch import mySSD
+from v1.SSD_from_scratch import mySSD
 
 
 

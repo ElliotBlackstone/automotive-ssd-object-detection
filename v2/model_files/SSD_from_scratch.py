@@ -234,44 +234,34 @@ class mySSD(nn.Module):
 
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        B = x.size(0)
 
         x = self.VGG16_UpTo_conv4_3(x)
-        x_VGG16_conv43 = x # will use later, no need to recompute
+        x_conv43 = x
 
         x = self.VGG16_extras(x)
         x = self.extra_conv6(x)
 
-        x_conv7 = self.extra_conv7(x)
-        x_conv8 = self.extra_conv8_2(x_conv7)
-        x_conv9 = self.extra_conv9_2(x_conv8)
+        x_conv7  = self.extra_conv7(x)
+        x_conv8  = self.extra_conv8_2(x_conv7)
+        x_conv9  = self.extra_conv9_2(x_conv8)
         x_conv10 = self.extra_conv10_2(x_conv9)
         x_conv11 = self.extra_conv11_2(x_conv10)
 
-        # apply localization head box
-        loc_list = [self.box_head[0](x_VGG16_conv43).permute(0, 2, 3, 1),  # (B, 38, 38, 4*4)
-                    self.box_head[1](x_conv7).permute(0, 2, 3, 1),         # (B, 19, 19, 6*4)
-                    self.box_head[2](x_conv8).permute(0, 2, 3, 1),         # (B, 10, 10, 6*4)
-                    self.box_head[3](x_conv9).permute(0, 2, 3, 1),         # (B, 5, 5, 6*4)
-                    self.box_head[4](x_conv10).permute(0, 2, 3, 1),        # (B, 3, 3, 4*4)
-                    self.box_head[5](x_conv11).permute(0, 2, 3, 1)         # (B, 1, 1, 4*4)
-                    ]
-        
-        # apply classification head box
-        cls_list = [self.cls_head[0](x_VGG16_conv43).permute(0, 2, 3, 1),  # (B, 38, 38, 4*num_classes)
-                    self.cls_head[1](x_conv7).permute(0, 2, 3, 1),         # (B, 19, 19, 6*num_classes)
-                    self.cls_head[2](x_conv8).permute(0, 2, 3, 1),         # (B, 10, 10, 6*num_classes)
-                    self.cls_head[3](x_conv9).permute(0, 2, 3, 1),         # (B, 5, 5, 6*num_classes)
-                    self.cls_head[4](x_conv10).permute(0, 2, 3, 1),        # (B, 3, 3, 4*num_classes)
-                    self.cls_head[5](x_conv11).permute(0, 2, 3, 1)         # (B, 1, 1, 4*num_classes)
-                    ]
-        
-        #flatten
-        loc_output = [o.reshape(o.size(0), -1) for o in loc_list]            # (B, 34928 = 8732*4)
-        cls_output = [o.reshape(o.size(0), -1) for o in cls_list]            # (B, 8732*num_classes) 
-        
-        loc_bbox_form = torch.cat(loc_output, dim=1).reshape(x.size(0), -1, 4)                      # (B, 8732, 4)           - box regression predictions per prior
-        cls_preds = torch.cat(cls_output, dim=1).reshape(x.size(0), -1, self.num_classes)           # (B, 8732, num_classes) - logits per prior
-                                                                                        # in this case, 8732 is the number of priors
+        feats = [x_conv43, x_conv7, x_conv8, x_conv9, x_conv10, x_conv11]
+
+        loc_out = []
+        cls_out = []
+
+        for feat, box_head, cls_head in zip(feats, self.box_head, self.cls_head):
+            loc = box_head(feat).permute(0, 2, 3, 1).contiguous().view(B, -1, 4)
+            cls = cls_head(feat).permute(0, 2, 3, 1).contiguous().view(B, -1, self.num_classes)
+            loc_out.append(loc)
+            cls_out.append(cls)
+
+        loc_bbox_form = torch.cat(loc_out, dim=1)   # [B, 8732, 4]
+        cls_preds     = torch.cat(cls_out, dim=1)   # [B, 8732, num_classes]
+
         return loc_bbox_form, cls_preds
 
     

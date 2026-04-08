@@ -3,8 +3,6 @@ import torch
 from torchvision.ops import complete_box_iou, box_iou, distance_box_iou, generalized_box_iou
 from typing import Tuple, Dict, List
 
-from ..model_files.encode_ssd import encode_ssd
-
 
 
 def move_targets_to_device(targets, device, non_blocking=True):
@@ -15,6 +13,9 @@ def move_targets_to_device(targets, device, non_blocking=True):
             for k, v in t.items()
         })
     return moved
+
+
+
 
 
 def build_targets(priors_cxcywh: torch.Tensor,
@@ -41,53 +42,6 @@ def build_targets(priors_cxcywh: torch.Tensor,
     loc_t_pm: [N_pos_total, 4] localization targets for positives only
     cls_t:    [B, P] class targets
     """
-    if not (0.0 < iou_thresh < 1.0):
-        raise ValueError(f"iou_thresh must be in (0, 1), got {iou_thresh}")
-
-    device = priors_cxcywh.device
-    dtype = priors_cxcywh.dtype
-    B = len(targets)
-    P = priors_cxcywh.shape[0]
-
-    norm = priors_cxcywh.new_tensor((W, H, W, H))
-
-    cls_t = torch.empty((B, P), dtype=torch.long, device=device)
-    pos_mask = torch.empty((B, P), dtype=torch.bool, device=device)
-    loc_pos_list = []
-
-    for i, t in enumerate(targets):
-        gt_xyxy_px = t["boxes"].to(dtype=dtype)
-        gt_labels = t["labels"].to(dtype=torch.long)
-
-        if gt_xyxy_px.shape[0] == 0:
-            gt_xyxy = gt_xyxy_px.new_zeros((0, 4))
-        else:
-            gt_xyxy = gt_xyxy_px / norm
-
-        loc_pos_i, cls_t_i, pos_mask_i = encode_ssd(priors_cxcywh=priors_cxcywh,
-                                                    priors_xyxy=priors_xyxy,
-                                                    gt_boxes_xyxy=gt_xyxy,
-                                                    gt_labels=gt_labels,
-                                                    iou_thresh=iou_thresh,
-                                                    background_class=0,
-                                                    variances=variances,
-                                                    iou_variant=iou_variant)
-
-        cls_t[i] = cls_t_i
-        pos_mask[i] = pos_mask_i
-        loc_pos_list.append(loc_pos_i)
-
-    if loc_pos_list:
-        loc_t_pm = torch.cat(loc_pos_list, dim=0)
-    else:
-        loc_t_pm = priors_cxcywh.new_zeros((0, 4))
-
-    return pos_mask, loc_t_pm, cls_t
-
-
-
-def build_targets_2(priors_cxcywh, priors_xyxy, targets, H=300, W=300,
-                    iou_thresh=0.50, variances=(0.1, 0.2), iou_variant="IoU"):
     device = priors_cxcywh.device
     dtype  = priors_cxcywh.dtype
     B = len(targets)
@@ -97,8 +51,8 @@ def build_targets_2(priors_cxcywh, priors_xyxy, targets, H=300, W=300,
     gt_boxes_list  = [t["boxes"].to(dtype=dtype, device=device) / norm for t in targets]
     gt_labels_list = [t["labels"].to(dtype=torch.long, device=device) for t in targets]
 
-    gt_counts = torch.tensor([g.shape[0] for g in gt_boxes_list], device=device, dtype=torch.long)
-    max_G = int(gt_counts.max().item()) if B > 0 else 0
+    gt_counts = [g.shape[0] for g in gt_boxes_list]
+    max_G = max(gt_counts, default=0)
 
     cls_t    = torch.zeros((B, P), dtype=torch.long, device=device)
     pos_mask = torch.zeros((B, P), dtype=torch.bool, device=device)
@@ -134,18 +88,43 @@ def build_targets_2(priors_cxcywh, priors_xyxy, targets, H=300, W=300,
     matched_labels = gt_labels_pad.gather(1, best_gt_per_prior)
     cls_t[pos_mask] = matched_labels[pos_mask] + 1
 
-    gt_boxes_matched = gt_boxes_pad.gather(1, best_gt_per_prior.unsqueeze(-1).expand(B, P, 4))
-    priors_exp = priors_cxcywh.unsqueeze(0).expand(B, P, 4)
+    # gt_boxes_matched = gt_boxes_pad.gather(1, best_gt_per_prior.unsqueeze(-1).expand(B, P, 4))
+    # priors_exp = priors_cxcywh.unsqueeze(0).expand(B, P, 4)
+
+    # v_c, v_s = variances
+    # gt_cxy = 0.5 * (gt_boxes_matched[..., :2] + gt_boxes_matched[..., 2:])
+    # gt_wh  = gt_boxes_matched[..., 2:] - gt_boxes_matched[..., :2]
+
+    # t_xy = (gt_cxy - priors_exp[..., :2]) / priors_exp[..., 2:] / v_c
+    # t_wh = torch.log((gt_wh / priors_exp[..., 2:]).clamp_min(1e-12)) / v_s
+
+    # loc_all = torch.cat((t_xy, t_wh), dim=-1)
+    # loc_t_pm = loc_all[pos_mask]
+
+
+    # Encode only positive priors.
+    # This preserves the same ordering as the old loc_all[pos_mask]:
+    # batch-major, then prior-major.
+    pos_idx = pos_mask.nonzero(as_tuple=False)   # [N_pos_total, 2]
+
+    if pos_idx.numel() == 0:
+        return pos_mask, priors_cxcywh.new_zeros((0, 4)), cls_t
+
+    b_pos = pos_idx[:, 0]                        # [N_pos_total]
+    p_pos = pos_idx[:, 1]                        # [N_pos_total]
+
+    matched_gt_pos = best_gt_per_prior[b_pos, p_pos]   # [N_pos_total]
+    gt_boxes_pos   = gt_boxes_pad[b_pos, matched_gt_pos]  # [N_pos_total, 4]
+    priors_pos     = priors_cxcywh[p_pos]               # [N_pos_total, 4]
 
     v_c, v_s = variances
-    gt_cxy = 0.5 * (gt_boxes_matched[..., :2] + gt_boxes_matched[..., 2:])
-    gt_wh  = gt_boxes_matched[..., 2:] - gt_boxes_matched[..., :2]
+    gt_cxy = 0.5 * (gt_boxes_pos[:, :2] + gt_boxes_pos[:, 2:])
+    gt_wh  = gt_boxes_pos[:, 2:] - gt_boxes_pos[:, :2]
 
-    t_xy = (gt_cxy - priors_exp[..., :2]) / priors_exp[..., 2:] / v_c
-    t_wh = torch.log((gt_wh / priors_exp[..., 2:]).clamp_min(1e-12)) / v_s
+    t_xy = (gt_cxy - priors_pos[:, :2]) / priors_pos[:, 2:] / v_c
+    t_wh = torch.log((gt_wh / priors_pos[:, 2:]).clamp_min(1e-12)) / v_s
 
-    loc_all = torch.cat((t_xy, t_wh), dim=-1)
-    loc_t_pm = loc_all[pos_mask]
+    loc_t_pm = torch.cat((t_xy, t_wh), dim=-1)
 
     return pos_mask, loc_t_pm, cls_t
 
@@ -160,12 +139,12 @@ def compute_box_metric(
     Compute pairwise box metric between boxes1 and boxes2.
 
     Args:
-        boxes1: Tensor[N, 4] in xyxy format
-        boxes2: Tensor[M, 4] in xyxy format
+        boxes1: Tensor[B, N, 4] in xyxy format
+        boxes2: Tensor[B, M, 4] in xyxy format
         variant: one of {"IoU", "GIoU", "DIoU", "CIoU"}
 
     Returns:
-        Tensor[N, M] of pairwise scores
+        Tensor[B, N, M] of pairwise scores
     """
 
     key = variant.strip().upper()

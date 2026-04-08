@@ -5,7 +5,7 @@ import statistics
 import torch
 from torch.utils.data import DataLoader
 
-from v2.training_files.build_targets import build_targets, build_targets_2
+from v2.training_files.build_targets import build_targets
 from v2.training_files.CELoss_w_neg_mining import CELoss_w_neg_mining
 
 
@@ -94,7 +94,7 @@ def benchmark_train_loop(
         optimizer.zero_grad(set_to_none=True)
         
 
-        pos_mask, loc_t_pm, cls_t = build_targets_2(priors_cxcywh=model.priors,
+        pos_mask, loc_t_pm, cls_t = build_targets(priors_cxcywh=model.priors,
                                                   priors_xyxy=model.priors_xyxy,
                                                   targets=targets,
                                                   H=images.shape[-2],

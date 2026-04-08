@@ -1,12 +1,11 @@
 import argparse
 import time
-from dataclasses import replace
+from pathlib import Path
 
 import cv2
 import numpy as np
 
 import platform
-import os
 
 from SSDInt8_ONNX_Pred import SSDInt8ONNXPredictor, PreprocessConfig
 
@@ -14,19 +13,9 @@ from SSDInt8_ONNX_Pred import SSDInt8ONNXPredictor, PreprocessConfig
 # to run:
 # desktop
 # python SSD_int8_realtime_video.py --model C:\Users\eblac\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_with_pre_post.onnx --show-fps
-
+#
 # laptop
 # python SSD_int8_realtime_video.py --model C:\Users\eblac\OneDrive\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_with_pre_post.onnx --show-fps --camera 1
-
-
-def build_class_names_fg(class_to_idx: dict) -> list[str]:
-    """
-    Foreground class names in index order 0..C-2.
-    Your model's conf has C=6 => foreground count is 5, matching your dict.
-    """
-    idx_to_class = {v: k for k, v in class_to_idx.items()}
-    n = len(idx_to_class)
-    return [idx_to_class[i] for i in range(n)]
 
 
 def draw_predictions_bgr(
@@ -38,14 +27,13 @@ def draw_predictions_bgr(
     """
     pred = {"labels": [str], "scores": [float], "boxes": np.ndarray (K,4) xyxy in frame pixels}
     """
-    out = frame_bgr #.copy()
+    out = frame_bgr
     H, W = out.shape[:2]
 
     boxes = pred["boxes"]
     labels = pred["labels"]
     scores = pred["scores"]
 
-    # Defensive: handle empty
     if boxes is None or len(labels) == 0:
         return out
 
@@ -63,9 +51,7 @@ def draw_predictions_bgr(
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
         if show_labels:
-            name = labels[i]
-            sc = scores[i]
-            txt = f"{name}:{score_fmt.format(sc)}"
+            txt = f"{labels[i]}:{score_fmt.format(scores[i])}"
             cv2.putText(
                 out,
                 txt,
@@ -107,7 +93,41 @@ def open_camera(source, backend: str):
         last_err = b
         cap.release()
 
-    raise RuntimeError(f"Could not open camera source={source!r} with backends={trial} (last tried: {last_err})")
+    raise RuntimeError(
+        f"Could not open camera source={source!r} with backends={trial} (last tried: {last_err})"
+    )
+
+
+def open_video_writer(out_path: str, fps: float, frame_size: tuple[int, int]):
+    """Open a writer. Prefer mp4v for .mp4, otherwise fall back to XVID .avi."""
+    out_path = str(out_path)
+    suffix = Path(out_path).suffix.lower()
+
+    candidates = []
+    if suffix == ".mp4":
+        candidates.append((out_path, cv2.VideoWriter_fourcc(*"mp4v")))
+    candidates.append((out_path, cv2.VideoWriter_fourcc(*"XVID")))
+    candidates.append((str(Path(out_path).with_suffix(".avi")), cv2.VideoWriter_fourcc(*"XVID")))
+
+    for candidate_path, fourcc in candidates:
+        writer = cv2.VideoWriter(candidate_path, fourcc, float(fps), frame_size)
+        if writer.isOpened():
+            return writer, candidate_path
+        writer.release()
+
+    raise RuntimeError("VideoWriter failed to open for all attempted codecs/paths.")
+
+
+def estimate_fps_from_timestamps(timestamps: list[float], fallback_fps: float) -> float:
+    if len(timestamps) < 2:
+        return float(fallback_fps)
+
+    elapsed = timestamps[-1] - timestamps[0]
+    if elapsed <= 0:
+        return float(fallback_fps)
+
+    est = (len(timestamps) - 1) / elapsed
+    return max(1.0, est)
 
 
 def main():
@@ -116,7 +136,11 @@ def main():
     ap.add_argument("--camera", default=0, type=int, help="Webcam index")
     ap.add_argument("--width", default=1280, type=int)
     ap.add_argument("--height", default=720, type=int)
-    ap.add_argument("--fps", default=30, type=int)
+    ap.add_argument("--fps", default=30, type=int, help="Requested camera FPS")
+    ap.add_argument("--record-fps", default=0.0, type=float,
+                    help="Saved video FPS. Use 0 for auto-estimate from actual processed frame rate.")
+    ap.add_argument("--record-init-frames", default=30, type=int,
+                    help="Number of processed frames to observe before auto-selecting saved video FPS.")
     ap.add_argument("--score-thresh", default=0.20, type=float)
     ap.add_argument("--nms-thresh", default=0.50, type=float)
     ap.add_argument("--max-per-img", default=100, type=int)
@@ -125,11 +149,18 @@ def main():
     ap.add_argument("--show-fps", action="store_true")
     ap.add_argument("--save-video", action="store_true", help="Save annotated output to a video file")
     ap.add_argument("--out-video", default="ssd_int8_demo.mp4", type=str, help="Output video path")
-    ap.add_argument("--backend", default="auto", choices=["auto", "any", "dshow", "msmf", "v4l2", "gstreamer"],
-                    help="VideoCapture backend. Use 'auto' for OS-specific fallback.",)
-    ap.add_argument("--device", default=None, help="Optional device path (Linux), e.g. /dev/video2. If set, overrides --camera.",)
+    ap.add_argument(
+        "--backend",
+        default="auto",
+        choices=["auto", "any", "dshow", "msmf", "v4l2", "gstreamer"],
+        help="VideoCapture backend. Use 'auto' for OS-specific fallback.",
+    )
+    ap.add_argument(
+        "--device",
+        default=None,
+        help="Optional device path (Linux), e.g. /dev/video2. If set, overrides --camera.",
+    )
     args = ap.parse_args()
-
 
     class_to_idx = {"biker": 0, "car": 1, "pedestrian": 2, "trafficLight": 3, "truck": 4}
 
@@ -140,69 +171,46 @@ def main():
         preprocess_cfg=PreprocessConfig(input_color="bgr"),
     )
 
-
     source = args.device if args.device is not None else args.camera
     cap, backend_used = open_camera(source, args.backend)
     print(f"[info] opened camera source={source!r} using backend={backend_used}")
     if not cap.isOpened():
         raise RuntimeError(f"Could not open camera index {args.camera}")
 
-    # Reduce capture latency / buffering
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(args.width))
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(args.height))
     cap.set(cv2.CAP_PROP_FPS, float(args.fps))
 
-    # Ask camera for MJPG (many Logitech cams support; helps throughput)
     fourcc = cv2.VideoWriter_fourcc(*"MJPG")
     cap.set(cv2.CAP_PROP_FOURCC, fourcc)
 
-    # Warm-up (first frame + first run)
     ok, frame_bgr = cap.read()
     if not ok:
         raise RuntimeError("Failed to read initial frame.")
     _ = predictor(frame_bgr)
 
-
-
-    # ---- video recording setup ----
     writer = None
     out_path = args.out_video
-
-    record_fps = float(args.fps)  # output fps you want the file to have
-    t_start = time.perf_counter()
-    frames_written = 0
-
-    if args.save_video:
-        fourcc_out = cv2.VideoWriter_fourcc(*"mp4v")
-        H0, W0 = frame_bgr.shape[:2]
-        writer = cv2.VideoWriter(out_path, fourcc_out, float(args.fps), (W0, H0))
-        if not writer.isOpened():
-            # fallback
-            out_path = out_path.rsplit(".", 1)[0] + ".avi"
-            fourcc_out = cv2.VideoWriter_fourcc(*"XVID")
-            writer = cv2.VideoWriter(out_path, fourcc_out, float(args.fps), (W0, H0))
-            if not writer.isOpened():
-                raise RuntimeError("VideoWriter failed to open (mp4v and XVID).")
+    buffered_frames: list[np.ndarray] = []
+    buffered_timestamps: list[float] = []
+    record_fps = float(args.record_fps) if args.record_fps > 0 else None
 
     fps_smoothed = 0.0
     last_print = time.perf_counter()
 
     try:
         while True:
+            loop_t0 = time.perf_counter()
+
             ok, frame_bgr = cap.read()
             if not ok:
                 break
 
-            t0 = time.perf_counter()
-
-            # Predictor expects RGB uint8 HWC
-            # frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            pred = predictor(frame_bgr)  # {"labels":..., "scores":..., "boxes":...} in frame pixel coords
-
+            pred = predictor(frame_bgr)
             vis = draw_predictions_bgr(frame_bgr, pred, show_labels=not args.no_labels)
 
-            dt = time.perf_counter() - t0
+            dt = time.perf_counter() - loop_t0
             inst_fps = (1.0 / dt) if dt > 0 else 0.0
             fps_smoothed = 0.9 * fps_smoothed + 0.1 * inst_fps
 
@@ -217,19 +225,35 @@ def main():
                     2,
                 )
 
-            if writer is not None:
-                # writer.write(vis)
-                t_now = time.perf_counter()
-                target_frames = int((t_now - t_start) * record_fps)
-                n_to_write = target_frames - frames_written
-                for _ in range(max(0, n_to_write)):
+            if args.save_video:
+                if writer is None:
+                    buffered_frames.append(vis.copy())
+                    buffered_timestamps.append(time.perf_counter())
+
+                    ready_to_open = record_fps is not None or len(buffered_frames) >= max(2, args.record_init_frames)
+                    if ready_to_open:
+                        if record_fps is None:
+                            record_fps = estimate_fps_from_timestamps(
+                                buffered_timestamps,
+                                fallback_fps=max(1.0, fps_smoothed, float(args.fps)),
+                            )
+
+                        H0, W0 = buffered_frames[0].shape[:2]
+                        writer, out_path = open_video_writer(out_path, record_fps, (W0, H0))
+                        print(f"[info] saving video at {record_fps:.2f} FPS -> {out_path}")
+
+                        for fr in buffered_frames:
+                            writer.write(fr)
+
+                        buffered_frames.clear()
+                        buffered_timestamps.clear()
+                else:
                     writer.write(vis)
-                frames_written += max(0, n_to_write)
 
             cv2.imshow("SSD INT8 ONNX Runtime", vis)
 
             key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), 27):  # q or ESC
+            if key in (ord("q"), 27):
                 break
 
             now = time.perf_counter()
@@ -238,9 +262,22 @@ def main():
                 last_print = now
 
     finally:
+        if args.save_video and writer is None and buffered_frames:
+            if record_fps is None:
+                record_fps = estimate_fps_from_timestamps(
+                    buffered_timestamps,
+                    fallback_fps=max(1.0, fps_smoothed, float(args.fps)),
+                )
+            H0, W0 = buffered_frames[0].shape[:2]
+            writer, out_path = open_video_writer(out_path, record_fps, (W0, H0))
+            print(f"[info] saving short video at {record_fps:.2f} FPS -> {out_path}")
+            for fr in buffered_frames:
+                writer.write(fr)
+
         if writer is not None:
             writer.release()
             print(f"Saved video: {out_path}")
+
         cap.release()
         cv2.destroyAllWindows()
 
