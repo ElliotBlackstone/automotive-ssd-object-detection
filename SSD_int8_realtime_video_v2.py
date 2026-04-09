@@ -12,7 +12,7 @@ from SSDInt8_ONNX_Pred_v2 import SSDInt8ONNXPredictorRaw, PreprocessConfig
 
 # to run:
 # desktop
-# python SSD_int8_realtime_video.py --model C:\Users\eblac\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_with_pre_post.onnx --show-fps
+# python SSD_int8_realtime_video_v2.py --model C:\Users\eblac\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_v2.onnx --show-fps --save-video --record-fps 15
 #
 # laptop
 # python SSD_int8_realtime_video.py --model C:\Users\eblac\OneDrive\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_with_pre_post.onnx --show-fps --camera 1
