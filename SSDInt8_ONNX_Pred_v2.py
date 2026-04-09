@@ -61,7 +61,7 @@ class SSDInt8ONNXPredictorRaw:
         iou_variant: str = "DIoU",
         max_per_img: int = 100,
         postprocess_device: Optional[Union[str, torch.device]] = None,
-        pred_labels_are_one_based: bool = True,
+        pred_labels_are_one_based: bool = False,
     ):
         self.pre_cfg = preprocess_cfg
         self.score_thresh = float(score_thresh)
