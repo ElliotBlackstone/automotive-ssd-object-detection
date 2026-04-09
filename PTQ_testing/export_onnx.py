@@ -7,11 +7,10 @@ import sys
 
 import torch
 
-# --- make repo root importable ---
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from v1.SSD_from_scratch import mySSD
+from v2.model_files.SSD_from_scratch import mySSD
 
 
 
@@ -33,7 +32,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", type=str, required=True, help="Path to .pth state_dict")
     ap.add_argument("--out", type=str, default="ssd.onnx", help="Output .onnx path")
-    ap.add_argument("--opset", type=int, default=17)
+    ap.add_argument("--opset", type=int, default=18)
     ap.add_argument("--static-batch", action="store_true", help="Export with fixed batch=1")
     args = ap.parse_args()
 
@@ -70,6 +69,7 @@ def main() -> None:
         input_names=["images"],
         output_names=["loc", "conf"],
         dynamic_axes=dynamic_axes,
+        external_data=False,
     )
 
     print(f"Wrote: {out_path}")

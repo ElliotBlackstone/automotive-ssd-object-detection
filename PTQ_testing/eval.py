@@ -12,13 +12,13 @@ from torchvision.transforms import v2
 
 import onnxruntime as ort
 
-# repo root on path so imports work when running from PTQ_testing/
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-import CarImageClass
-from SSD_from_scratch import mySSD
-from SSD_trainer import collate_detection
+import v2.CarImageClass as CarImageClass
+from v2.model_files.SSD_from_scratch import mySSD
+from v1.SSD_trainer import collate_detection
 
 
 def build_test_tfms() -> v2.Compose:
@@ -84,18 +84,6 @@ def build_val_data_from_train_dir(
     )
     return val_data
 
-
-# def collate_detection(batch):
-#     # batch: list of (img, target)
-#     imgs = []
-#     targets = []
-#     for img, tgt in batch:
-#         if not isinstance(img, torch.Tensor):
-#             img = torch.as_tensor(img)
-#         imgs.append(img.to(dtype=torch.float32))
-#         targets.append(tgt)
-#     x = torch.stack(imgs, dim=0)  # [B,3,300,300]
-#     return x, targets
 
 
 def make_ort_session(onnx_path: str, threads: int = 1) -> ort.InferenceSession:
@@ -182,9 +170,10 @@ def eval_backend(
 
             if backend == "torch":
                 preds = model.predict(
-                    images,
+                    images=images,
                     score_thresh=score_thresh,
                     nms_thresh=nms_thresh,
+                    iou_variant="DIoU",
                     max_per_img=max_per_img,
                     class_agnostic=class_agnostic,
                 )
@@ -197,9 +186,10 @@ def eval_backend(
                 loc_t = torch.from_numpy(loc_np)
                 conf_t = torch.from_numpy(conf_np)
                 preds = model.predict(
-                    images,
+                    images=images,
                     score_thresh=score_thresh,
                     nms_thresh=nms_thresh,
+                    iou_variant="DIoU",
                     max_per_img=max_per_img,
                     class_agnostic=class_agnostic,
                     pre_loc_all=loc_t,

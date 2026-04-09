@@ -9,11 +9,10 @@ import numpy as np
 import torch
 import onnxruntime as ort
 
-# --- make repo root importable (adjust if needed) ---
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from SSD_from_scratch import mySSD  # adjust if your import path differs
+from v2.model_files.SSD_from_scratch import mySSD
 
 
 def build_model() -> torch.nn.Module:

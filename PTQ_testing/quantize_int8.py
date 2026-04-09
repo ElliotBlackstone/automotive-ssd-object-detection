@@ -19,7 +19,7 @@ from onnxruntime.quantization import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-import CarImageClass
+import v2.CarImageClass as CarImageClass
 from calibration_data import build_calibration_loader_from_dataset, SSDCalibrationDataReader
 
 
@@ -80,7 +80,6 @@ def main() -> None:
     ap.add_argument("--test_size", type=float, default=0.25)
     ap.add_argument("--num_workers", type=int, default=0)
 
-    # Keep MinMax as default because it's the most universally reliable in ORT static PTQ flows.
     ap.add_argument("--calib_method", type=str, default="MinMax", choices=["MinMax", "Entropy", "Percentile"])
 
     args = ap.parse_args()

@@ -15,7 +15,7 @@ import onnxruntime as ort
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from SSD_from_scratch import mySSD
+from v2.model_files.SSD_from_scratch import mySSD
 
 
 def build_model() -> torch.nn.Module:
@@ -76,7 +76,7 @@ def run_bench(
     *,
     backend: str,
     mode: str,
-    model: torch.nn.Module,
+    model: mySSD,
     ort_sess: ort.InferenceSession | None,
     xs: List[Tuple[torch.Tensor, np.ndarray]],
     warmup: int,
@@ -108,6 +108,7 @@ def run_bench(
                         x,
                         score_thresh=score_thresh,
                         nms_thresh=nms_thresh,
+                        iou_variant="DIoU",
                         max_per_img=max_per_img,
                         class_agnostic=class_agnostic,
                         pre_loc_all=loc,
@@ -122,7 +123,7 @@ def run_bench(
                 loc, conf = model(x)
                 if mode == "e2e":
                     _ = model.predict(
-                        x,
+                        images=x,
                         score_thresh=score_thresh,
                         nms_thresh=nms_thresh,
                         max_per_img=max_per_img,
@@ -149,9 +150,10 @@ def run_bench(
                 loc_t = torch.from_numpy(loc_o)
                 conf_t = torch.from_numpy(conf_o)
                 _ = model.predict(
-                    x_t,
+                    images=x_t,
                     score_thresh=score_thresh,
                     nms_thresh=nms_thresh,
+                    iou_variant="DIoU",
                     max_per_img=max_per_img,
                     class_agnostic=class_agnostic,
                     pre_loc_all=loc_t,
@@ -168,9 +170,10 @@ def run_bench(
                 loc_t = torch.from_numpy(loc_o)
                 conf_t = torch.from_numpy(conf_o)
                 _ = model.predict(
-                    x_t,
+                    images=x_t,
                     score_thresh=score_thresh,
                     nms_thresh=nms_thresh,
+                    iou_variant="DIoU",
                     max_per_img=max_per_img,
                     class_agnostic=class_agnostic,
                     pre_loc_all=loc_t,
