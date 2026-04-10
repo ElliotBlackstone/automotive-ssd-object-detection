@@ -69,7 +69,7 @@ function preprocessImage(img) {
 
   for (let y = 0; y < INPUT_H; y++) {
     for (let x = 0; x < INPUT_W; x++) {
-      const pixelIdx = (y * INPUT_W + x);
+      const pixelIdx = y * INPUT_W + x;
       const rgbaIdx = pixelIdx * 4;
 
       const r = rgba[rgbaIdx] / 255.0;
@@ -112,25 +112,108 @@ function toLabelName(rawLabel) {
   return `cls=${i}`;
 }
 
-function boxesLookNormalized(boxes) {
-  if (!boxes || boxes.length === 0) return false;
+function detectBoxMode(boxes, imgW, imgH) {
+  if (!boxes || boxes.length === 0) return 'original';
+
   let maxAbs = 0;
+  let maxX = 0;
+  let maxY = 0;
+
   for (let i = 0; i < boxes.length; i++) {
     const v = Math.abs(Number(boxes[i]));
     if (v > maxAbs) maxAbs = v;
   }
-  return maxAbs <= 1.5;
+
+  if (maxAbs <= 1.5) {
+    return 'normalized';
+  }
+
+  for (let i = 0; i + 3 < boxes.length; i += 4) {
+    const x1 = Number(boxes[i]);
+    const y1 = Number(boxes[i + 1]);
+    const x2 = Number(boxes[i + 2]);
+    const y2 = Number(boxes[i + 3]);
+
+    maxX = Math.max(maxX, x1, x2);
+    maxY = Math.max(maxY, y1, y2);
+  }
+
+  const fitsModelInput = maxX <= INPUT_W * 1.1 && maxY <= INPUT_H * 1.1;
+  const imageIsLargerThanModel = imgW > INPUT_W * 1.1 || imgH > INPUT_H * 1.1;
+
+  if (fitsModelInput && imageIsLargerThanModel) {
+    return 'model_input';
+  }
+
+  return 'original';
+}
+
+function scaleBoxToImage(x1, y1, x2, y2, mode, imgW, imgH) {
+  if (mode === 'normalized') {
+    return [x1 * imgW, y1 * imgH, x2 * imgW, y2 * imgH];
+  }
+
+  if (mode === 'model_input') {
+    const sx = imgW / INPUT_W;
+    const sy = imgH / INPUT_H;
+    return [x1 * sx, y1 * sy, x2 * sx, y2 * sy];
+  }
+
+  return [x1, y1, x2, y2];
+}
+
+function clamp(value, lo, hi) {
+  return Math.min(Math.max(value, lo), hi);
+}
+
+function getOverlayScale(canvas, img) {
+  const rect = canvas.getBoundingClientRect();
+
+  if (!rect || rect.width <= 0 || rect.height <= 0) {
+    return 1;
+  }
+
+  const cssScaleX = canvas.width / rect.width;
+  const cssScaleY = canvas.height / rect.height;
+  const cssScale = Math.max(cssScaleX, cssScaleY, 1);
+
+  const imageScale = Math.max(Math.min(img.width, img.height) / 900, 1);
+  return Math.max(cssScale, imageScale);
+}
+
+function drawCaption(ctx, text, x, y, fontSize, overlayScale, imgW, imgH) {
+  const padX = Math.max(6 * overlayScale, 8);
+  const padY = Math.max(3 * overlayScale, 4);
+  const textWidth = ctx.measureText(text).width;
+  const boxW = textWidth + 2 * padX;
+  const boxH = fontSize + 2 * padY;
+
+  let boxX = clamp(x, 0, Math.max(0, imgW - boxW));
+  let boxY = y - boxH - 4 * overlayScale;
+
+  if (boxY < 0) {
+    boxY = clamp(y + 4 * overlayScale, 0, Math.max(0, imgH - boxH));
+  }
+
+  ctx.fillStyle = 'rgba(220, 38, 38, 0.95)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+
+  ctx.fillStyle = 'white';
+  ctx.fillText(text, boxX + padX, boxY + padY);
 }
 
 function drawPredictions(img, boxes, scores, labels, scoreThresh) {
   drawImage(predictionCanvas, predictionCtx, img);
 
-  const normalized = boxesLookNormalized(boxes);
-  const sx = normalized ? img.width : 1;
-  const sy = normalized ? img.height : 1;
+  const mode = detectBoxMode(boxes, img.width, img.height);
+  const overlayScale = getOverlayScale(predictionCanvas, img);
+  const lineWidth = Math.max(3 * overlayScale, Math.min(img.width, img.height) / 250);
+  const fontSize = Math.max(18 * overlayScale, Math.min(img.width, img.height) / 35);
 
-  predictionCtx.lineWidth = 2;
-  predictionCtx.font = '16px Arial';
+  predictionCtx.lineWidth = lineWidth;
+  predictionCtx.font = `bold ${fontSize}px Arial`;
+  predictionCtx.textBaseline = 'top';
+  predictionCtx.strokeStyle = 'rgb(220, 38, 38)';
 
   for (let i = 0; i < scores.length; i++) {
     const score = Number(scores[i]);
@@ -139,25 +222,32 @@ function drawPredictions(img, boxes, scores, labels, scoreThresh) {
     const base = i * 4;
     if (base + 3 >= boxes.length) break;
 
-    let x1 = Number(boxes[base]) * sx;
-    let y1 = Number(boxes[base + 1]) * sy;
-    let x2 = Number(boxes[base + 2]) * sx;
-    let y2 = Number(boxes[base + 3]) * sy;
+    let x1 = Number(boxes[base]);
+    let y1 = Number(boxes[base + 1]);
+    let x2 = Number(boxes[base + 2]);
+    let y2 = Number(boxes[base + 3]);
 
-    const w = x2 - x1;
-    const h = y2 - y1;
+    [x1, y1, x2, y2] = scaleBoxToImage(x1, y1, x2, y2, mode, img.width, img.height);
+
+    x1 = clamp(x1, 0, img.width);
+    y1 = clamp(y1, 0, img.height);
+    x2 = clamp(x2, 0, img.width);
+    y2 = clamp(y2, 0, img.height);
+
+    const left = Math.min(x1, x2);
+    const top = Math.min(y1, y2);
+    const right = Math.max(x1, x2);
+    const bottom = Math.max(y1, y2);
+    const w = right - left;
+    const h = bottom - top;
+
+    if (w <= 1 || h <= 1) continue;
+
+    predictionCtx.strokeRect(left, top, w, h);
+
     const label = toLabelName(labels[i]);
     const caption = `${label} ${score.toFixed(2)}`;
-
-    predictionCtx.strokeStyle = 'red';
-    predictionCtx.strokeRect(x1, y1, w, h);
-
-    const textWidth = predictionCtx.measureText(caption).width;
-    const textY = Math.max(18, y1 - 6);
-    predictionCtx.fillStyle = 'red';
-    predictionCtx.fillRect(x1, textY - 16, textWidth + 10, 20);
-    predictionCtx.fillStyle = 'white';
-    predictionCtx.fillText(caption, x1 + 5, textY);
+    drawCaption(predictionCtx, caption, left, top, fontSize, overlayScale, img.width, img.height);
   }
 }
 

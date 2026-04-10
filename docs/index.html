@@ -15,10 +15,6 @@
           Upload an image. The model runs locally in your browser and draws detections for
           cyclists, cars, pedestrians, traffic lights, and trucks.
         </p>
-        <p class="warning">
-          This GitHub Pages version requires a stitched ONNX model that already includes
-          decode + NMS in the graph.
-        </p>
       </header>
 
       <section class="card controls">
@@ -56,7 +52,7 @@
         <h2>About this project</h2>
         <ul>
           <li><strong>Model:</strong> Custom SSD exported to ONNX for browser inference.</li>
-          <li><strong>Input:</strong> RGB image resized to 300×300 with ImageNet normalization.</li>
+          <li><strong>Input:</strong> RGB image resized to 300x300 with ImageNet normalization.</li>
           <li><strong>Deployment:</strong> Static frontend on GitHub Pages, inference on the user's device.</li>
           <li><strong>Safety note:</strong> Demo only. Not for real-world driving decisions.</li>
         </ul>
