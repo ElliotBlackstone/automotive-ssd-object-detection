@@ -47,7 +47,7 @@ The output of the localization head is the concatenation of the six tensors abov
 ```math
     4*38*38 + 6*19*19 + 6*10*10 + 6*5*5 + 4*3*3 + 4*1*1 = 8732.
 ```
-
+<br/>
 Similarly, the output of the classification head corresponding to 'conv_4_3' is a tensor of size $(B, C*4, 38, 38)$, where $C$ is the number of classes (including a background class), and all other numbers are the same as before.  Repeating this process for all six of the convolution layers, the output of the classification head is comprised of tensors of size:
 * $(B, C*4, 38, 38)$ (from 'conv_4_3')
 * $(B, C*6, 19, 19)$ (from 'conv_7')
@@ -65,11 +65,12 @@ The output of the classification head is easier to understand.  Given an image (
 ```math
     p_{j} = \frac{e^{\ell_{j}}}{\sum_{i=0}^{C-1}e^{\ell_{i}}}, \quad j=0,1,\ldots,C-1.
 ```
-
+<br/>
 If the classification score corresponding to a particular prior $p = (c_{x}^{p}, c_{y}^{p}, w^{p}, h^{p})$ is 'high' (i.e. greater than a predetermined threshold), that means (assuming the model is working well) a GT box $g = (c_{x}^{g}, c_{y}^{g}, w^{g}, h^{g})$ should be 'close' to $p$.  The localization head does *not* predict locations of GT boxes, it predicts offsets to priors of the form $(t_x, t_y, t_w, t_h)$, where
 ```math
     t_{x} = \frac{c_{x}^{\hat{g}} - c_{x}^{p}}{w^{p}v_{c}}, \quad t_{y} = \frac{c_{y}^{\hat{g}} - c_{y}^{p}}{h^{p}v_{c}}, \quad t_{w} = \frac{\log(w^{\hat{g}}/w^{p})}{v_{s}}, \quad t_{h} = \frac{\log(h^{\hat{g}}/h^{p})}{v_{s}},
 ```
+<br/>
 $v_{c}$, $v_{s}$ are user chosen parameters for center, scale variance, respectively, and $\hat{g}=(c_{x}^{\hat{g}}, c_{y}^{\hat{g}}, w^{\hat{g}}, h^{\hat{g}})$ is the predicted bounding box.  Let us reiterate that the GT box $g$ is unknown and $(t_x, t_y, t_w, t_h)$ are the predicted values, so our predicted bounding box has coordinates 
 ```math
 c_{x}^{\hat{g}} = c_{x}^{p} + t_{x}w^{p}v_{c}, \quad c_{y}^{\hat{g}} = c_{y}^{p} + t_{y}h^{p}v_{c}, \quad w^{\hat{g}} = w^{p}\mathrm{e}^{t_{w}v_{s}}, \quad h^{\hat{g}} = h^{p}\mathrm{e}^{t_{h}v_{s}}.
