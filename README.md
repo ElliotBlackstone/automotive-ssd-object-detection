@@ -1,95 +1,193 @@
-# Automotive object detection via a SSD model built from scratch
-In this project, the single shot multibox detector (SSD) model of W. Liu, et al. (see [here](https://link.springer.com/chapter/10.1007/978-3-319-46448-0_2)) is constructed from scratch, with minor modifications. This model is trained and tested on an automotive focused dataset and a website has been created where users can upload images to see the model's predictions, see [here](https://ssd-demo-app-884945419812.us-central1.run.app/).
+# Automotive SSD Object Detection
 
-A high level explanation of how the model works is given in [SSD_explained.ipynb](/SSD_explained.ipynb).
+A from-scratch PyTorch implementation of the Single Shot Multibox Detector (SSD) for automotive object detection on dashcam imagery.
 
-For instructions on using this repo yourself, see [GettingStarted.md](/GettingStarted.md).
+This repository now contains **two generations of the project**:
 
+- **v1**: the original baseline implementation
+- **v2**: a reorganized and expanded codebase with modular model/training files, model comparisons, benchmarking, ONNX/PTQ experiments, and local real-time video inference
 
-<!--
-## Model Architecture
-SSD is a feed-forward convolutional neural network.  The early layers of the model are the well known VGG-16 network (see [here](https://ieeexplore.ieee.org/document/7486599)).
+The project also includes:
 
-![SSD model architecture by W. Liu, et al.](/figures/SSD_architecture.png)
+- dataset exploration and preprocessing notebooks
+- training and evaluation code
+- benchmarking and profiling utilities
+- ONNX export and post-training quantization (PTQ) workflows
+- local webcam/video inference scripts
+- the earlier FastAPI/Cloud Run web app code used for a hosted demo
 
-In the above figure (from the paper of W. Liu, et al.), we can see the architecture of the SSD model.
-Many advances have been made since the introduction of SSD.
-Two such improvements have been implemented in the model here.  First, batch norms now follow most of the convolution layers, and, second, intersection over union (IoU) based non-maximum supression is upgraded to complete IoU based non-maximum supression.
-The constuction in this project (see [here](/SSD_from_scratch.py)) is not elegant, as the intent is to show model architecture for educational purposes.  A cleaner implementation by Max deGroot can be found [here](https://github.com/amdegroot/ssd.pytorch/blob/master/ssd.py).
--->
+## Repository Overview
+
+```text
+.
+├── v1/                           # Original baseline SSD code
+├── v2/                           # Newer codebase
+│   ├── model_files/              # SSD model, priors, encode/decode, NMS helpers, visualization
+│   └── training_files/           # Training loop, dataloaders, losses, profiling, checkpoints
+├── PTQ_testing/                  # ONNX export, parity tests, PTQ, evaluation, benchmark scripts
+├── benchmarking/                 # DataLoader and training/inference benchmark utilities
+├── docs/                         # GitHub pages website files
+├── app_files/                    # Earlier FastAPI + Docker web demo code
+├── figures/                      # README figures and plots
+├── papers/                       # Reference material
+├── EDA_car.ipynb                 # Dataset exploration
+├── SSD_explained.ipynb           # High-level SSD explanation
+├── v1_vs_v2.ipynb                # Version comparison notebook
+├── SSDInt8_ONNX_Pred.py          # ONNX int8 predictor
+├── SSDInt8_ONNX_Pred_v2.py       # ONNX int8 predictor for v2 workflow
+├── SSD_int8_realtime_video.py    # Live webcam demo script using v1 model
+├── SSD_int8_realtime_video_v2.py # Live webcam demo script using v2 model
+├── SSD_video_predict.py          # Video-file inference utility
+├── GettingStarted.md             # Setup and usage notes
+└── training.md                   # Training details, results, and plots
+```
 
 ## Dataset
-The [dataset](https://www.kaggle.com/datasets/sshikamaru/udacity-self-driving-car-dataset), originally compiled by Udacity, contains 29,800 images with 194,539 bounding boxes with classification labels.  Two such examples are below.
 
-![An image with ground truth bounding boxes and classification.](/figures/idx_6932_GT_Box_Label.png)
-![An image with ground truth bounding boxes and classification.](/figures/idx_2265_GT_Box_Label.png)
+The models are trained on the Udacity self-driving car dataset, an automotive-focused detection dataset containing **29,800 images** and **194,539 labeled bounding boxes**. The object classes used in this project are automotive road-scene categories such as cars, trucks, pedestrians, bikers, and traffic lights.
 
-Unfortunately, there are some flaws with the dataset, as seen below.
+The repository includes exploratory analysis and preprocessing notebooks:
 
-![An image with ground truth bounding boxes and classification.](/figures/idx_1568_GT_Box_Label.png)
-![An image with ground truth bounding boxes and classification.](/figures/idx_5979_bad_target_example.png)
+- [`EDA_car.ipynb`](./EDA_car.ipynb) for exploratory data analysis
+- [`v1/preprocess_car.ipynb`](./v1/preprocess_car.ipynb) for the preprocessing workflow
 
-In the first image, two of the traffic lights are labeled twice and in the second image, a house is labeled as a truck.  These labeling mistakes are present throughout the dataset but occur infrequently.  See file [EDA_car.ipynb](/EDA_car.ipynb) for exploratory data analysis.
+The preprocessing pipeline collapses traffic-light subclasses into a single class and prepares SSD-ready train/test data.
 
-<!--
-## Custom Image Class
-The `ImageClass` dataset of [CarImageClass.py](/CarImageClass.py) wraps training images and COCO/VOC-style annotations into a PyTorch `Dataset` that works cleanly with torchvision v2 transforms and detection models. It scans a target directory for `.jpg` files and a single `.csv` annotation file, builds a `class_to_idx` mapping, and groups rows by filename so each index returns one image and all of its boxes. For a given index, it decodes the image, looks up the corresponding rows, and returns `(img, target)` where `img` is a CHW tensor and `target` is a dict with `boxes` as `tv_tensors.BoundingBoxes` in absolute `xyxy` pixels, `labels` as integer class indices, `image_id`, and optionally per-box `areas` computed after any geometric transforms. The constructor supports sub-sampling via `file_pct` and a fixed `rand_seed`, and the helper `make_train_test_split` builds stratified, group-wise train/test splits by filename so that images from the same file never appear in both sets. A visualization method, `show_with_box`, can overlay both ground-truth and predicted boxes (in several coordinate conventions) on the decoded image, which is useful for quickly inspecting annotation quality and model outputs.
--->
+## Project Versions
 
+### v1
 
-## Preprocessing
-This project includes a preprocessing pipeline to turn the self-driving car [dataset](https://www.kaggle.com/datasets/sshikamaru/udacity-self-driving-car-dataset) into a clean SSD training set. Starting from the _annotations.csv file (included in the dataset download), all traffic-light subclasses (e.g. trafficLight-Green, trafficLight-RedLeft, etc.) are collapsed into a single trafficLight class, simplifying the label space. Images that appear in the raw export folder but have no bounding-box annotations are explicitly added as “empty” background examples, so the model sees both object-rich and purely background frames during training. The combined annotation table is then split into train and test using StratifiedGroupKFold, stratifying on class labels while grouping by filename to prevent any image from appearing in both splits, and the corresponding images and CSV annotation files are written into separate train/ and test/ directories for downstream training.  See the [preprocessing_car.ipynb](/preprocessing_car.ipynb) notebook for details and/or to perform these steps yourself.
+[`v1/`](./v1) contains the original baseline implementation of the project. It includes:
 
+- the original dataset wrapper
+- the original SSD model implementation
+- the baseline trainer
+- the initial preprocessing and training notebooks
 
+Use v1 if you want to inspect the first complete end-to-end version of the project or compare later design changes against the original code.
 
+### v2
 
-## Model training
-Each training image is passed through a torchvision v2 transform pipeline that converts it to a float32 tensor, then applies a size-aware IoU-based random crop (`ConditionalIoUCrop`) which chooses between two `RandomIoUCrop` policies depending on whether the image contains large or only small objects, so that small targets are more likely to be zoomed in on. This is followed by bounding-box sanitization, random horizontal flips, and random photometric distortion for geometric and color augmentation, before finally resizing to 300×300 and normalizing with ImageNet mean and standard deviation to match the SSD backbone’s expected input distribution.
+[`v2/`](./v2) contains the newer codebase. The main difference is that the project has been split into smaller modules for cleaner experimentation and easier comparison. Moreover, the package [`gen-nms-package`](https://github.com/ElliotBlackstone/gen-nms-package), which was created for this project, provides GIoU, DIoU, and CIoU based non-maximum suppression with C++/CUDA backends.  The usage of this package significantly reduces the runtime of NMS.
 
-The SSD detector is trained end-to-end with a standard localization + classification objective and hard negative mining. For each batch, the model predicts localization offsets and class logits for all 8,732 priors; these are matched to ground-truth boxes using an IoU-style overlap, and only matched priors are treated as positives. The localization loss is Smooth L1 on the encoded offsets for positive priors, normalized by the number of positives. The classification loss is a cross-entropy over all classes (including background), but it is computed on all positive priors plus a subset of the hardest negatives: for each image, negative priors are ranked by their per-prior CE loss and only the top-k are kept, with a configurable negative-to-positive ratio (e.g. 3:1). This focuses learning on informative background examples and prevents easy negatives from dominating the gradients. During evaluation, the same target-building and loss computation are reused, and detection quality is measured via torchmetrics `MeanAveragePrecision` at IoU=0.5 (mAP@0.50), using the model’s own `predict` method for decoding and NMS. 
+#### `v2/model_files/`
 
-Optimization uses SGD with Nesterov momentum and weight decay, together with a cosine learning-rate schedule with linear warmup, see learning-rate vs. epoch plot below for an example with 150 epochs (which was used for model training).
+[`v2/model_files/`](./v2/model_files) contains the model-side code, including:
 
-![Cosine LR scheudle](/figures/LR_plot.png)
+- SSD architecture definition
+- default/prior box creation
+- box encoding and decoding
+- NMS variant selection utilities
+- prediction visualization helpers
 
-The helper `build_optimizer_and_scheduler` builds an SGD optimizer (chosen values: base LR 3e-3, momentum 0.9, weight decay 5e-4) and a `LambdaLR` scheduler that first linearly increases the learning rate from 0 to the base LR over a specified number of warmup epochs, then decays it following a cosine curve down to a minimum LR (chosen value: 1e-6) over the remaining training steps. The scheduler is designed to be stepped once per optimizer step (per mini-batch), and the training loop optionally supports stepping per batch or per epoch depending on the `sched_step_w_opt` flag. The trainer also supports early stopping based on validation mAP, periodic and “best” checkpoint saving (including optimizer/scheduler state and RNG state), and utility functions to merge and plot loss/mAP curves across multiple training runs.
+#### `v2/training_files/`
 
-Models were trained for 150 epochs with the previously described optimizer and schuduler using [SSD_model_train.ipynb](/SSD_model_train.ipynb).
+[`v2/training_files/`](./v2/training_files) contains the training and evaluation workflow, including:
 
-## Results
-Three models were trained for 150 epochs with the optimizer and schuduler previously described.  The first model (named "Zoom out, no bootstrap") was trained with an additional image transformation, `RandomZoomOut`.  The second model (named "No zoom out, no bootstrap") was trained with no additional augmentations.  The final model (named "No zoom out, bootstrap") had the training set “bootstrapped” by oversampling image filenames according to how many objects they contain: images with 0 objects are used once, those with 1–2 objects are duplicated, those with 3–6, 7–9, and ≥10 objects are repeated 3, 4, and 5 times respectively in the `file_list`. This weighted duplication increases the effective number of training samples and biases each epoch toward images with richer annotations, without fabricating any synthetic labels.  The training loss/mAP@0.50 information per epoch for the top performing model is below.  The mAP subplot is mAP@0.50 evaluated on the validation set per epoch.
+- hard-negative-mining classification loss
+- conditional IoU crop augmentation
+- cosine learning-rate scheduling
+- target building and matching
+- training and test steps
+- checkpoint save/load utilities
+- profiling notebooks and scripts
 
-![Training loss data](/figures/loss_vs_epoch.png)
+Use v2 if you want the current, more modular version of the project.
 
-The mAP@0.50, along with individual class mAP@0.50, on the test set are reported in the table below.
+## Training and Evaluation
 
-| Model    | mAP@0.50 | biker | car | pedestrian | traffic light | truck |
-| :------: | :------: | :------: | :------: | :------: | :------: | :------: |
-| Zoom out, no bootstrap     | 0.4613 | 0.2854 | 0.6618 | 0.2145 | 0.5571 | 0.5875 |
-| No zoom out, no bootstrap  | 0.4724 | 0.3015 | 0.6681 | 0.2314 | 0.5619 | 0.5992 |
-| No zoom out, bootstrap     | 0.5292 | 0.4045 | 0.7088 | 0.2907 | 0.5956 | 0.6465 |
+The SSD detector is trained end-to-end in PyTorch using:
 
-Since the vast majority of objects in the dataset are small compared to the image size, it is not a surprise that the `RandomZoomOut` transformation degrades model performance.  Enlarging the training dataset via the "bootstrapping" method significantly improved model performance.
+- localization and classification losses
+- hard negative mining
+- torchvision v2-based preprocessing and augmentation
+- mAP@0.50 evaluation
 
+For more details on the training method and results, see [`training.md`](./training.md).
 
-## Website App
-This repository includes an interactive web demo of the SSD model ([link](https://ssd-demo-app-884945419812.us-central1.run.app/)). When a user uploads an image through the browser, the FastAPI backend loads the trained `mySSD` model (biker, car, pedestrian, traffic light, and truck classes, trained on daytime dashcam footage) and calls the model’s `show_prediction_side_by_side` method to generate a visualization. The method preprocesses the uploaded image, runs a forward pass through the detector, and returns a single PNG where the left panel is the original image (resized with preserved aspect ratio) and the right panel overlays the predicted bounding boxes and class labels. The resulting side-by-side image is streamed back directly to the client so users can quickly inspect how the model interprets their own images.
+For a higher-level walkthrough of the model, see [`SSD_explained.ipynb`](./SSD_explained.ipynb).
 
-The files for the web demo are located in the [app_files](/app_files/) folder.
+For setup and run instructions, see [`GettingStarted.md`](./GettingStarted.md).
 
-The images below are from the website.  The left image is user uploaded and the right image contains the model predictions.
+## ONNX, Quantization, and Benchmarking
 
-![website output 1](./figures/website_predictions/good1.png)
-![website output 2](./figures/website_predictions/good2_from_test_set.png)
-![website output 2](./figures/website_predictions/good4_from_test_set.png)
+The repository now includes a fuller optimization workflow beyond baseline PyTorch training.
 
+### PTQ / ONNX
 
-## Post Training Quantization
-The SSD network forward pass was exported to ONNX and ran inference on CPU using ONNX Runtime (ORT). FP32 parity was verified against the original PyTorch model, then benchmarked latency (p50/p95) and evaluated accuracy on the same validation split (mAP@0.5). Compared to PyTorch, ORT FP32 reduced median latency from 295.8 ms to 258.1 ms with identical mAP@0.5 (0.5353). Applying post-training static INT8 quantization with calibration on validation images further reduced median latency to 63.6 ms (p95 79.7 ms), while maintaining essentially the same detection quality (mAP@0.5 0.5339, a −0.0014 absolute drop).  The files used to create this table are available in the [PTQ testing](/PTQ_testing/) folder.
+[`PTQ_testing/`](./PTQ_testing) contains scripts and assets for:
 
-| Backend | p50 latency (ms) | p95 latency (ms) | mAP@0.5 | Δp50 vs torch (ms) | ΔmAP@0.5 vs torch |
-|---|---:|---:|---:|---:|---:|
-| torch | 295.837 | 327.177 | 0.5353 | 0.000 | 0.0000 |
-| ort_fp32 | 258.050 | 278.836 | 0.5353 | -37.787 | 0.0000 |
-| ort_int8 | 63.553 | 79.703 | 0.5339 | -232.284 | -0.0014 |
+- exporting SSD models to ONNX
+- parity testing between PyTorch and ONNXRuntime
+- post-training quantization to INT8
+- evaluation of quantized models
+- pipeline benchmarking
 
+This directory is the main entry point for the ONNX and INT8 inference work in the project.
+
+### Benchmarking
+
+[`benchmarking/`](./benchmarking) contains utilities for profiling and benchmarking:
+
+- DataLoader performance
+- training-loop performance
+- GPU timing utilities
+- configuration sweeps for loader settings
+
+These tools are useful for understanding where the project spends time during training and inference.
+
+## Local Inference and Real-Time Video Detection
+
+A major addition to the repository is support for **local inference** workflows.
+
+The root directory now includes scripts for:
+
+- **ONNX int8 image prediction**
+  - [`SSDInt8_ONNX_Pred.py`](./SSDInt8_ONNX_Pred.py)
+  - [`SSDInt8_ONNX_Pred_v2.py`](./SSDInt8_ONNX_Pred_v2.py)
+- **real-time webcam/video-stream detection**
+  - [`SSD_int8_realtime_video.py`](./SSD_int8_realtime_video.py)
+  - [`SSD_int8_realtime_video_v2.py`](./SSD_int8_realtime_video_v2.py)
+- **video-file inference**
+  - [`SSD_video_predict.py`](./SSD_video_predict.py)
+
+These scripts shift the project beyond offline notebook evaluation and toward practical local deployment.
+
+## Earlier Web App
+
+The repository still contains the earlier FastAPI + Docker web app in [`app_files/`](./app_files), including the Dockerfile, model-serving app, and related assets. That code documents the original server-hosted deployment based on Google Cloud Run.
+
+The repository now also emphasizes **local inference**, **ONNX/PTQ**, and **real-time video detection**. A similar demo is also available as a static GitHub Pages site [here](https://elliotblackstone.github.io/automotive-ssd-object-detection/). Unlike the earlier Cloud Run deployment, the GitHub Pages version performs inference directly in the browser using ONNX Runtime Web, so no backend model server is required.  This means uploaded images are processed client-side, and performance may vary depending on the user’s browser and hardware.
+
+## Comparison Notebooks
+
+The repository contains several notebooks that are useful for understanding how the project evolved:
+
+- [`SSD_model_compare.ipynb`](./SSD_model_compare.ipynb)
+- [`v1_vs_v2.ipynb`](./v1_vs_v2.ipynb)
+- [`SSD_inference_profiling.ipynb`](./SSD_inference_profiling.ipynb)
+- [`int8_model_testing.ipynb`](./int8_model_testing.ipynb)
+
+These are the best places to document detailed experiment results, plots, and version-to-version comparisons without overloading the top-level README.
+
+## What Changed in This Repository
+
+Compared with the earlier form of the project, the repository now clearly includes:
+
+- a legacy **v1** implementation and a newer **v2** implementation
+- a more modular training and model structure in v2
+- ONNX and PTQ tooling
+- benchmarking/profiling utilities
+- local real-time video detection scripts
+- the earlier web app preserved as part of the project history
+
+## Getting Started
+
+Start with [`GettingStarted.md`](./GettingStarted.md).
+
+Then choose the workflow that matches what you want to do:
+
+- inspect the original baseline in [`v1/`](./v1)
+- work with the newer modular code in [`v2/`](./v2)
+- explore ONNX/PTQ in [`PTQ_testing/`](./PTQ_testing)
+- test local inference with the real-time/video scripts in the repository root
