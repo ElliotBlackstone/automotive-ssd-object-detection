@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SSD Demo</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <h1>Single Shot Detector Demo</h1>
+        <p>
+          Upload an image. The model runs locally in your browser and draws detections for
+          cyclists, cars, pedestrians, traffic lights, and trucks.
+        </p>
+        <p class="warning">
+          This GitHub Pages version requires a stitched ONNX model that already includes
+          decode + NMS in the graph.
+        </p>
+      </header>
+
+      <section class="card controls">
+        <div class="row">
+          <label for="fileInput" class="button secondary">Choose image</label>
+          <input id="fileInput" type="file" accept="image/*" />
+          <button id="runBtn" class="button">Run detection</button>
+        </div>
+
+        <div class="row thresholds">
+          <label>
+            Score threshold
+            <input id="scoreThresh" type="number" min="0" max="1" step="0.05" value="0.2" />
+          </label>
+        </div>
+
+        <div id="status" class="status">Loading model…</div>
+        <div id="errorBox" class="error hidden"></div>
+      </section>
+
+      <section class="card">
+        <div class="results-grid">
+          <div>
+            <h2>Original image</h2>
+            <canvas id="originalCanvas"></canvas>
+          </div>
+          <div>
+            <h2>Prediction result</h2>
+            <canvas id="predictionCanvas"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <section class="card about">
+        <h2>About this project</h2>
+        <ul>
+          <li><strong>Model:</strong> Custom SSD exported to ONNX for browser inference.</li>
+          <li><strong>Input:</strong> RGB image resized to 300×300 with ImageNet normalization.</li>
+          <li><strong>Deployment:</strong> Static frontend on GitHub Pages, inference on the user's device.</li>
+          <li><strong>Safety note:</strong> Demo only. Not for real-world driving decisions.</li>
+        </ul>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
