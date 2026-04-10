@@ -1,0 +1,104 @@
+# How does a single shot detector (SSD) model work?
+
+The key ideas to understanding how the SSD model works are:
+* Prior bounding boxes,
+* Model architecture,
+* Model outputs,
+* Non maximum suppression,
+* model training.
+
+
+### Prior bounding boxes
+
+First, we need to understand the concept of *prior* bounding boxes, or just *priors*.  The model is equipped with a set of predetermined (by model architecture) priors.  In the case of this SSD model, it has 8732.  Priors are static and never change with model training.  Some of the priors are displayed below in red with the ground truth (GT) bounding box in green.
+
+![36 priors and a car](figures/priors_3.gif)
+![19*19*4 priors and a car](figures/priors_19.gif)
+![38*38*4 priors and a car](figures/priors_38.gif)
+
+As we can see, the priors come in various sizes, since the objective is to be able to detect objects of various size.
+
+
+### Model architecture: Multi-scale feature maps and head outputs
+SSD uses six feature maps at different resolutions as detection heads.  The name "single shot detector" was given since the model predicts class and location in one pass.  The image below is from the paper of W. Liu, et al. (see [here](https://link.springer.com/chapter/10.1007/978-3-319-46448-0_2)) which first introduced the SSD model.
+
+![SSD model architecture by W. Liu, et al.](figures/SSD_architecture.png)
+
+
+The output of the localization head corresponding to 'conv_4_3' in the image above is a tensor of size $(B, 4*4, 38, 38)$.  Let's breakdown the meaning of each dimension of this tensor (from left to right):
+
+* B: batch size
+* 4: number of regression parameters per prior (the encoded offsets $(t_{x}, t_{y}, t_{w}, t_{h})$, see next section)
+* 4: number of priors per center
+* 38: feature map height
+* 38: feature map width
+
+Repeating this process for all six of the feature maps, the output of the localization head is comprised of tensors of size:
+* $(B, 4*4, 38, 38)$ (from 'conv_4_3')
+* $(B, 4*6, 19, 19)$ (from 'conv_7') 
+* $(B, 4*6, 10, 10)$ (from 'conv_8_2')
+* $(B, 4*6, 5, 5)$ (from 'conv_9_2')
+* $(B, 4*4, 3, 3)$ (from 'conv_10_2')
+* $(B, 4*4, 1, 1)$ (from 'conv_11_2')
+
+To properly interpret the second coordinate above, it follows the form "parameters per prior" $\times$ "priors per center".  Returning to the images of the priors above, the left/middle/right image shows the priors corresponding 'conv_10_2'/'conv_8_2'/'conv_4_3' layers, respectively.  The lower layers (e.g. 'conv_4_3', 'conv_7') are responsible for smaller objects, while the higher layers (e.g. 'conv_10_2', 'conv_11_2') are responsible for larger objects.
+
+The output of the localization head is the concatenation of the six tensors above, which results in a tensor of size $(B, 8732, 4)$.  Now it is clear where the number 8732 comes from, since 
+
+\begin{equation*}
+    4*38*38 + 6*19*19 + 6*10*10 + 6*5*5 + 4*3*3 + 4*1*1 = 8732.
+\end{equation*}
+
+Similarly, the output of the classification head corresponding to 'conv_4_3' is a tensor of size $(B, C*4, 38, 38)$, where $C$ is the number of classes (including a background class), and all other numbers are the same as before.  Repeating this process for all six of the convolution layers, the output of the classification head is comprised of tensors of size:
+* $(B, C*4, 38, 38)$ (from 'conv_4_3')
+* $(B, C*6, 19, 19)$ (from 'conv_7')
+* $(B, C*6, 10, 10)$ (from 'conv_8_2')
+* $(B, C*6, 5, 5)$ (from 'conv_9_2')
+* $(B, C*4, 3, 3)$ (from 'conv_10_2')
+* $(B, C*4, 1, 1)$ (from 'conv_11_2')
+
+The output of the classification head is the concatenation of the six tensors above, which results in a tensor of size $(B, 8732, C)$.
+
+
+### How to interpret the model outputs?
+
+The output of the classification head is easier to understand.  Given an image (i.e. batch size $B=1$), the classification head outputs are class logits for each prior.  Given a particular prior, the classification head output is $(\ell_0, \ell_1, \ldots, \ell_{C-1})$, where $C$ is the number of classes (including background, which is given index $0$) and $\ell_j$, $j=0,1,\ldots, C-1$, is the logit for class $j$.  The class probabilities $(p_0, p_1, \ldots, p_{C-1})$ are computed via the softmax function
+\begin{equation*}
+    p_{j} = \frac{e^{\ell_{j}}}{\sum_{i=0}^{C-1}e^{\ell_{i}}}, \quad j=0,1,\ldots,C-1.
+\end{equation*}
+
+If the classification score corresponding to a particular prior $p = (c_{x}^{p}, c_{y}^{p}, w^{p}, h^{p})$ is 'high' (i.e. greater than a predetermined threshold), that means (assuming the model is working well) a GT box $g = (c_{x}^{g}, c_{y}^{g}, w^{g}, h^{g})$ should be 'close' to $p$.  The localization head does *not* predict locations of GT boxes, it predicts offsets to priors of the form $(t_x, t_y, t_w, t_h)$, where
+\begin{equation}
+    t_{x} = \frac{c_{x}^{\hat{g}} - c_{x}^{p}}{w^{p}v_{c}}, \quad t_{y} = \frac{c_{y}^{\hat{g}} - c_{y}^{p}}{h^{p}v_{c}}, \quad t_{w} = \frac{\log(w^{\hat{g}}/w^{p})}{v_{s}}, \quad t_{h} = \frac{\log(h^{\hat{g}}/h^{p})}{v_{s}},
+\end{equation}
+$v_{c}$, $v_{s}$ are user chosen parameters for center, scale variance, respectively, and $\hat{g}=(c_{x}^{\hat{g}}, c_{y}^{\hat{g}}, w^{\hat{g}}, h^{\hat{g}})$ is the predicted bounding box.  Let us reiterate that the GT box $g$ is unknown and $(t_x, t_y, t_w, t_h)$ are the predicted values, so our predicted bounding box has coordinates 
+\begin{equation*}
+c_{x}^{\hat{g}} = c_{x}^{p} + t_{x}w^{p}v_{c}, \quad c_{y}^{\hat{g}} = c_{y}^{p} + t_{y}h^{p}v_{c}, \quad w^{\hat{g}} = w^{p}\mathrm{e}^{t_{w}v_{s}}, \quad h^{\hat{g}} = h^{p}\mathrm{e}^{t_{h}v_{s}}.
+\end{equation*}
+
+
+### Non-maximum suppression (NMS)
+
+What does NMS do?  Let's look at our model's predictions on the above image without NMS.
+
+![Prediction without NMS](figures/pred_no_nms.gif)
+
+There can, and often will, be many priors that have a 'reasonable' overlap with a given GT object.  Our model should give a high classification score (above a user set `score threshold`) for many of the priors nearby a GT object.  For the image above, the model produces 9 predictions for this single car that surpass the `score threshold`.
+
+NMS chooses the prior with the highest classification score and then deletes (suppresses) other predictions that have a high Intersection over union (IoU) score with the top scoring prior.  This `NMS threshold` is a parameter that is chosen by the user.  For each selected box, we remove every remaining box whose IoU with it exceeds the `NMS threshold`; boxes whose IoU is below or equal to the threshold survive to the next step. Therefore, lowering the threshold makes NMS more aggressive (fewer boxes left), and raising it makes NMS less aggressive.
+
+![Prediction with NMS](figures/pred_after_nms.png)
+![Prediction with NMS, threshold too high](figures/pred_nms_thresh_too_high.png)
+
+In the figure above on the right, we can see what happens if the `NMS threshold` is too high.  It is to be noted that better predictions appeared in the .gif above that got suppressed but this is due to poor performance of the model and not the implementation of NMS.
+
+
+### How is the model trained?
+
+During training, each image’s ground-truth boxes are first matched to the fixed set of priors. For every prior $p_k$ and GT box $g_i$, an overlap score (IoU-based) is computed; each prior is assigned the GT with highest overlap, and each GT is also guaranteed at least one “best prior” via a forced match. A prior is marked positive if its best overlap with its assigned GT exceeds a chosen `IoU threshold` (e.g. 0.5) or if it is the forced best prior for some GT; all remaining priors are negatives (background).  For this image, the priors that have an IoU score greater than $0.5$ (the `IoU threshold`) with the GT box are displayed.
+
+![Priors above IoU threshold](figures/priors_above_threshold.gif)
+
+For each positive prior, the target regression offsets $(t_{x}, t_{y}, t_{w}, t_{h})$ are computed in the standard SSD parameterization: both prior and GT boxes are expressed in normalized $(c_x, c_y, w, h)$ coordinates, and the target offsets are given in eq. (1) above. This yields `loc_target` $\in \mathbb{R}^{P×4}$ and `cls_target`$\in\{0,…,C-1\}^P$.
+
+The loss is a combination of localization and classification terms. Localization loss (Smooth L1) is applied only to positive priors, comparing predicted offsets `loc[k]` to targets $(t_{x}, t_{y}, t_{w}, t_{h})$ and normalized by the number of positives $N_{\text{pos}}$. Classification loss is a multi-class cross-entropy on the logits `conf[k]` with targets `cls_target[k]`, but computed only on all positives plus a subset of negatives chosen by hard negative mining. For each negative prior, compute its classification loss (how badly the model misclassifies it as foreground), sort negatives by this loss, and keep at most `neg_pos_ratio × N_pos` of the hardest ones (e.g. $3:1$ ratio); negatives with near-zero loss are discarded. Since we have 8732 priors and usually only a few objects, the vast majority of priors are background (negatives). Without Hard Negative Mining, the training signal would be overwhelmed by these easy negatives. The final classification loss is averaged over positives plus these selected negatives and typically combined with the localization loss as $L = L_{\text{loc}} + \alpha L_{\text{cls}}$, giving gradients that focus on all positives and the most informative (hard) background examples.  This model takes $\alpha=1$.
