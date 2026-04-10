@@ -44,9 +44,9 @@ Repeating this process for all six of the feature maps, the output of the locali
 To properly interpret the second coordinate above, it follows the form "parameters per prior" $\times$ "priors per center".  Returning to the images of the priors above, the left/middle/right image shows the priors corresponding 'conv_10_2'/'conv_8_2'/'conv_4_3' layers, respectively.  The lower layers (e.g. 'conv_4_3', 'conv_7') are responsible for smaller objects, while the higher layers (e.g. 'conv_10_2', 'conv_11_2') are responsible for larger objects.
 
 The output of the localization head is the concatenation of the six tensors above, which results in a tensor of size $(B, 8732, 4)$.  Now it is clear where the number 8732 comes from, since 
-$$
+```math
     4*38*38 + 6*19*19 + 6*10*10 + 6*5*5 + 4*3*3 + 4*1*1 = 8732.
-$$
+```
 
 Similarly, the output of the classification head corresponding to 'conv_4_3' is a tensor of size $(B, C*4, 38, 38)$, where $C$ is the number of classes (including a background class), and all other numbers are the same as before.  Repeating this process for all six of the convolution layers, the output of the classification head is comprised of tensors of size:
 * $(B, C*4, 38, 38)$ (from 'conv_4_3')
