@@ -28,10 +28,10 @@ The project also includes:
 ├── benchmarking/                 # DataLoader and training/inference benchmark utilities
 ├── docs/                         # GitHub pages website files
 ├── app_files/                    # Earlier FastAPI + Docker web demo code
-├── figures/                      # README figures and plots
+├── figures/                      # Figures and plots
 ├── papers/                       # Reference material
 ├── EDA_car.ipynb                 # Dataset exploration
-├── SSD_explained.ipynb           # High-level SSD explanation
+├── SSD_explained.md              # High-level SSD explanation
 ├── v1_vs_v2.ipynb                # Version comparison notebook
 ├── SSDInt8_ONNX_Pred.py          # ONNX int8 predictor
 ├── SSDInt8_ONNX_Pred_v2.py       # ONNX int8 predictor for v2 workflow
