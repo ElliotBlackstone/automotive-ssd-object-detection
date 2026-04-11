@@ -1,21 +1,18 @@
 import argparse
+import platform
 import time
 from pathlib import Path
+from typing import List, Tuple
 
 import cv2
 import numpy as np
 
-import platform
-
 from SSDInt8_ONNX_Pred_v2 import SSDInt8ONNXPredictorRaw, PreprocessConfig
 
 
-# to run:
-# desktop
-# python SSD_int8_realtime_video_v2.py --model C:\Users\eblac\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_v2.onnx --show-fps --save-video --record-fps 15
-#
-# laptop
-# python SSD_int8_realtime_video.py --model C:\Users\eblac\OneDrive\Documents\GitHub\self-driving-car\PTQ_testing\ssd_int8_with_pre_post.onnx --show-fps --camera 1
+# Example usage:
+# python SSD_int8_realtime_video_v2.py --model C:\path\to\ssd_int8_v2.onnx --show-fps --batch-size 4
+# python SSD_int8_realtime_video_v2.py --model C:\path\to\ssd_int8_v2.onnx --show-fps --save-video --record-fps 15 --batch-size 2
 
 
 def draw_predictions_bgr(
@@ -98,7 +95,7 @@ def open_camera(source, backend: str):
     )
 
 
-def open_video_writer(out_path: str, fps: float, frame_size: tuple[int, int]):
+def open_video_writer(out_path: str, fps: float, frame_size: Tuple[int, int]):
     """Open a writer. Prefer mp4v for .mp4, otherwise fall back to XVID .avi."""
     out_path = str(out_path)
     suffix = Path(out_path).suffix.lower()
@@ -118,7 +115,7 @@ def open_video_writer(out_path: str, fps: float, frame_size: tuple[int, int]):
     raise RuntimeError("VideoWriter failed to open for all attempted codecs/paths.")
 
 
-def estimate_fps_from_timestamps(timestamps: list[float], fallback_fps: float) -> float:
+def estimate_fps_from_timestamps(timestamps: List[float], fallback_fps: float) -> float:
     if len(timestamps) < 2:
         return float(fallback_fps)
 
@@ -130,6 +127,50 @@ def estimate_fps_from_timestamps(timestamps: list[float], fallback_fps: float) -
     return max(1.0, est)
 
 
+def collect_frame_batch(cap, batch_size: int) -> Tuple[List[np.ndarray], bool]:
+    frames: List[np.ndarray] = []
+    stream_ended = False
+
+    for _ in range(batch_size):
+        ok, frame_bgr = cap.read()
+        if not ok:
+            stream_ended = True
+            break
+        frames.append(frame_bgr)
+
+    return frames, stream_ended
+
+
+def maybe_open_writer(
+    writer,
+    out_path: str,
+    record_fps,
+    fps_smoothed: float,
+    requested_fps: float,
+    buffered_frames: List[np.ndarray],
+    buffered_timestamps: List[float],
+):
+    if writer is not None:
+        return writer, out_path, record_fps
+
+    if record_fps is None:
+        record_fps = estimate_fps_from_timestamps(
+            buffered_timestamps,
+            fallback_fps=max(1.0, fps_smoothed, float(requested_fps)),
+        )
+
+    H0, W0 = buffered_frames[0].shape[:2]
+    writer, out_path = open_video_writer(out_path, record_fps, (W0, H0))
+    print(f"[info] saving video at {record_fps:.2f} FPS -> {out_path}")
+
+    for fr in buffered_frames:
+        writer.write(fr)
+
+    buffered_frames.clear()
+    buffered_timestamps.clear()
+    return writer, out_path, record_fps
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, type=str, help="Path to INT8 ONNX model (ssd_int8.onnx)")
@@ -137,10 +178,19 @@ def main():
     ap.add_argument("--width", default=1280, type=int)
     ap.add_argument("--height", default=720, type=int)
     ap.add_argument("--fps", default=30, type=int, help="Requested camera FPS")
-    ap.add_argument("--record-fps", default=0.0, type=float,
-                    help="Saved video FPS. Use 0 for auto-estimate from actual processed frame rate.")
-    ap.add_argument("--record-init-frames", default=30, type=int,
-                    help="Number of processed frames to observe before auto-selecting saved video FPS.")
+    ap.add_argument("--batch-size", default=1, type=int, help="Number of frames to run in one inference call")
+    ap.add_argument(
+        "--record-fps",
+        default=0.0,
+        type=float,
+        help="Saved video FPS. Use 0 for auto-estimate from actual processed frame rate.",
+    )
+    ap.add_argument(
+        "--record-init-frames",
+        default=30,
+        type=int,
+        help="Number of processed frames to observe before auto-selecting saved video FPS.",
+    )
     ap.add_argument("--score-thresh", default=0.20, type=float)
     ap.add_argument("--nms-thresh", default=0.50, type=float)
     ap.add_argument("--max-per-img", default=100, type=int)
@@ -162,12 +212,19 @@ def main():
     )
     args = ap.parse_args()
 
+    if args.batch_size < 1:
+        raise ValueError("--batch-size must be >= 1")
+
     class_to_idx = {"biker": 0, "car": 1, "pedestrian": 2, "trafficLight": 3, "truck": 4}
 
-    predictor = SSDInt8ONNXPredictorRaw(onnx_model_path=args.model,
-                                        class_to_idx=class_to_idx,
-                                        providers=["CPUExecutionProvider"],
-                                        preprocess_cfg=PreprocessConfig(input_color="bgr"),
+    predictor = SSDInt8ONNXPredictorRaw(
+        onnx_model_path=args.model,
+        class_to_idx=class_to_idx,
+        providers=["CPUExecutionProvider"],
+        preprocess_cfg=PreprocessConfig(input_color="bgr"),
+        score_thresh=args.score_thresh,
+        nms_thresh=args.nms_thresh,
+        max_per_img=args.max_per_img,
     )
 
     source = args.device if args.device is not None else args.camera
@@ -187,91 +244,107 @@ def main():
     ok, frame_bgr = cap.read()
     if not ok:
         raise RuntimeError("Failed to read initial frame.")
-    _ = predictor(frame_bgr)
+
+    warmup_batch = [frame_bgr.copy() for _ in range(args.batch_size)]
+    _ = predictor.predict_batch(warmup_batch)
 
     writer = None
     out_path = args.out_video
-    buffered_frames: list[np.ndarray] = []
-    buffered_timestamps: list[float] = []
+    buffered_frames: List[np.ndarray] = []
+    buffered_timestamps: List[float] = []
     record_fps = float(args.record_fps) if args.record_fps > 0 else None
 
     fps_smoothed = 0.0
     last_print = time.perf_counter()
+    should_exit = False
 
     try:
-        while True:
+        while not should_exit:
             loop_t0 = time.perf_counter()
 
-            ok, frame_bgr = cap.read()
-            if not ok:
+            frames_batch, stream_ended = collect_frame_batch(cap, args.batch_size)
+            if not frames_batch:
                 break
 
-            pred = predictor(frame_bgr)
-            vis = draw_predictions_bgr(frame_bgr, pred, show_labels=not args.no_labels)
+            preds_batch = predictor.predict_batch(frames_batch)
+            if len(preds_batch) != len(frames_batch):
+                raise RuntimeError(
+                    f"predict_batch returned {len(preds_batch)} predictions for {len(frames_batch)} frames."
+                )
 
             dt = time.perf_counter() - loop_t0
-            inst_fps = (1.0 / dt) if dt > 0 else 0.0
+            inst_fps = (len(frames_batch) / dt) if dt > 0 else 0.0
             fps_smoothed = 0.9 * fps_smoothed + 0.1 * inst_fps
 
-            if args.show_fps:
-                cv2.putText(
-                    vis,
-                    f"FPS: {fps_smoothed:.1f}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (255, 255, 255),
-                    2,
-                )
+            total_dets = 0
+            vis_batch: List[np.ndarray] = []
+            for frame_bgr_i, pred_i in zip(frames_batch, preds_batch):
+                total_dets += len(pred_i["labels"])
+                vis = draw_predictions_bgr(frame_bgr_i, pred_i, show_labels=not args.no_labels)
+
+                if args.show_fps:
+                    cv2.putText(
+                        vis,
+                        f"FPS: {fps_smoothed:.1f} | B: {len(frames_batch)}",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (255, 255, 255),
+                        2,
+                    )
+
+                vis_batch.append(vis)
 
             if args.save_video:
                 if writer is None:
-                    buffered_frames.append(vis.copy())
-                    buffered_timestamps.append(time.perf_counter())
+                    for vis in vis_batch:
+                        buffered_frames.append(vis.copy())
+                        buffered_timestamps.append(time.perf_counter())
 
                     ready_to_open = record_fps is not None or len(buffered_frames) >= max(2, args.record_init_frames)
                     if ready_to_open:
-                        if record_fps is None:
-                            record_fps = estimate_fps_from_timestamps(
-                                buffered_timestamps,
-                                fallback_fps=max(1.0, fps_smoothed, float(args.fps)),
-                            )
-
-                        H0, W0 = buffered_frames[0].shape[:2]
-                        writer, out_path = open_video_writer(out_path, record_fps, (W0, H0))
-                        print(f"[info] saving video at {record_fps:.2f} FPS -> {out_path}")
-
-                        for fr in buffered_frames:
-                            writer.write(fr)
-
-                        buffered_frames.clear()
-                        buffered_timestamps.clear()
+                        writer, out_path, record_fps = maybe_open_writer(
+                            writer=writer,
+                            out_path=out_path,
+                            record_fps=record_fps,
+                            fps_smoothed=fps_smoothed,
+                            requested_fps=float(args.fps),
+                            buffered_frames=buffered_frames,
+                            buffered_timestamps=buffered_timestamps,
+                        )
                 else:
-                    writer.write(vis)
+                    for vis in vis_batch:
+                        writer.write(vis)
 
-            cv2.imshow("SSD INT8 ONNX Runtime", vis)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), 27):
-                break
+            for vis in vis_batch:
+                cv2.imshow("SSD INT8 ONNX Runtime", vis)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord("q"), 27):
+                    should_exit = True
+                    break
 
             now = time.perf_counter()
             if now - last_print > 5.0:
-                print(f"[info] smoothed FPS ~ {fps_smoothed:.1f} | dets={len(pred['labels'])}")
+                print(
+                    f"[info] smoothed FPS ~ {fps_smoothed:.1f} | "
+                    f"batch={len(frames_batch)} | total dets={total_dets}"
+                )
                 last_print = now
+
+            if stream_ended:
+                break
 
     finally:
         if args.save_video and writer is None and buffered_frames:
-            if record_fps is None:
-                record_fps = estimate_fps_from_timestamps(
-                    buffered_timestamps,
-                    fallback_fps=max(1.0, fps_smoothed, float(args.fps)),
-                )
-            H0, W0 = buffered_frames[0].shape[:2]
-            writer, out_path = open_video_writer(out_path, record_fps, (W0, H0))
-            print(f"[info] saving short video at {record_fps:.2f} FPS -> {out_path}")
-            for fr in buffered_frames:
-                writer.write(fr)
+            writer, out_path, record_fps = maybe_open_writer(
+                writer=writer,
+                out_path=out_path,
+                record_fps=record_fps,
+                fps_smoothed=fps_smoothed,
+                requested_fps=float(args.fps),
+                buffered_frames=buffered_frames,
+                buffered_timestamps=buffered_timestamps,
+            )
 
         if writer is not None:
             writer.release()

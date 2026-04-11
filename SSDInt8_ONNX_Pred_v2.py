@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -9,6 +9,9 @@ import onnxruntime as ort
 import torch
 
 from v2.model_files.SSD_from_scratch import mySSD
+
+
+ImageLike = Union[str, np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -21,32 +24,23 @@ class PreprocessConfig:
 
 class SSDInt8ONNXPredictorRaw:
     """
-    Predictor for a raw int8 ONNX SSD model where postprocessing is done by a
+    Predictor for a raw INT8 ONNX SSD model where postprocessing is done by a
     PyTorch SSD model's predict(...) method.
 
-    External behavior matches the stitched predictor:
-      input:
-        - np.ndarray HxWx3 (uint8/float), either BGR or RGB per preprocess_cfg.input_color
-        - or str path (read via cv2.imread -> BGR)
+    Supported inputs:
+      - single image: np.ndarray HxWx3 or file path string
+      - batch of images: sequence of np.ndarray / file path strings
 
-      returns:
+    Supported outputs:
+      - predict_one / __call__: dict
+      - predict_batch: list[dict]
+
+    Each result dict has the form:
         {
           "labels": list[str],
           "scores": list[float],
-          "boxes":  np.ndarray (K,4) float32 xyxy in ORIGINAL image pixels
+          "boxes":  np.ndarray (K,4) float32 xyxy in ORIGINAL image pixels,
         }
-
-    Assumptions:
-      1) The ONNX model has one input and two outputs: loc_all, conf_all.
-      2) pytorch_post_model.predict(...) accepts:
-            x, pre_loc_all=..., pre_conf_all=...,
-            score_thresh=..., nms_thresh=..., iou_variant=..., max_per_img=...
-      3) pytorch_post_model.predict(...) returns either:
-            {"labels": Tensor[K], "scores": Tensor[K], "boxes": Tensor[K,4]}
-         or
-            [ {"labels": ..., "scores": ..., "boxes": ...} ]
-      4) The boxes returned by predict(...) are in model-input pixel coordinates
-         (for example 300x300), so this class rescales them back to ORIGINAL image pixels.
     """
 
     def __init__(
@@ -70,9 +64,11 @@ class SSDInt8ONNXPredictorRaw:
         self.max_per_img = int(max_per_img)
         self.pred_labels_are_one_based = bool(pred_labels_are_one_based)
 
-        self.pytorch_post_model = mySSD(class_to_idx_dict={'biker': 0, 'car': 1, 'pedestrian': 2, 'trafficLight': 3, 'truck': 4},
-                                        in_channels=3,
-                                        variances=(0.1, 0.2)).eval()
+        self.pytorch_post_model = mySSD(
+            class_to_idx_dict={"biker": 0, "car": 1, "pedestrian": 2, "trafficLight": 3, "truck": 4},
+            in_channels=3,
+            variances=(0.1, 0.2),
+        ).eval()
 
         idx_to_class = {v: k for k, v in class_to_idx.items()}
         n = len(idx_to_class)
@@ -116,8 +112,21 @@ class SSDInt8ONNXPredictorRaw:
         self._mean = np.array(self.pre_cfg.mean_rgb, dtype=np.float32).reshape(1, 1, 3)
         self._std = np.array(self.pre_cfg.std_rgb, dtype=np.float32).reshape(1, 1, 3)
 
-    def __call__(self, image: Union[str, np.ndarray]) -> Dict[str, Any]:
-        x_np, (orig_w, orig_h) = self.preprocess(image)
+    def __call__(self, image: ImageLike) -> Dict[str, Any]:
+        return self.predict_one(image)
+
+    def predict(self, image: ImageLike) -> Dict[str, Any]:
+        return self.predict_one(image)
+
+    def predict_one(self, image: ImageLike) -> Dict[str, Any]:
+        return self.predict_batch([image])[0]
+
+    def predict_batch(self, images: Sequence[ImageLike]) -> List[Dict[str, Any]]:
+        if len(images) == 0:
+            raise ValueError("predict_batch(...) requires at least one image.")
+
+        x_np, orig_sizes = self.preprocess_batch(images)
+        batch_size = int(x_np.shape[0])
 
         loc_all_np, conf_all_np = self.sess.run(
             [self.out_loc, self.out_conf],
@@ -125,13 +134,13 @@ class SSDInt8ONNXPredictorRaw:
         )
 
         if loc_all_np is None or conf_all_np is None:
-            return self._empty_result()
+            return [self._empty_result() for _ in range(batch_size)]
 
         loc_all_np = np.asarray(loc_all_np, dtype=np.float32)
         conf_all_np = np.asarray(conf_all_np, dtype=np.float32)
 
         if loc_all_np.size == 0 or conf_all_np.size == 0:
-            return self._empty_result()
+            return [self._empty_result() for _ in range(batch_size)]
 
         x_t = torch.from_numpy(np.ascontiguousarray(x_np)).to(
             device=self.postprocess_device, dtype=torch.float32
@@ -154,40 +163,36 @@ class SSDInt8ONNXPredictorRaw:
                 pre_conf_all=conf_all_t,
             )
 
-        pred = self._normalize_predict_output(pred)
+        pred_list = self._normalize_predict_output_batch(pred, expected_batch_size=batch_size)
 
-        labels_raw = pred["labels"]
-        scores = pred["scores"]
-        boxes = pred["boxes"]
+        results: List[Dict[str, Any]] = []
+        for pred_i, (orig_w, orig_h) in zip(pred_list, orig_sizes):
+            results.append(self._postprocess_single_result(pred_i, orig_w=orig_w, orig_h=orig_h))
+        return results
 
-        if boxes.numel() == 0:
-            return self._empty_result()
-
-        labels_np = labels_raw.detach().to("cpu", dtype=torch.int64).numpy().reshape(-1)
-        scores_np = scores.detach().to("cpu", dtype=torch.float32).numpy().reshape(-1)
-        boxes_np = boxes.detach().to("cpu", dtype=torch.float32).numpy().reshape(-1, 4)
-
-        boxes_np = self._scale_boxes_to_original(boxes_np, orig_w=orig_w, orig_h=orig_h)
-        labels_str = self._map_labels(labels_np)
-
-        return {
-            "labels": labels_str,
-            "scores": [float(s) for s in scores_np.tolist()],
-            "boxes": boxes_np.astype(np.float32, copy=False),
-        }
-
-    def preprocess(self, image: Union[str, np.ndarray]) -> Tuple[np.ndarray, Tuple[int, int]]:
-        """
-        Returns:
-          x: float32 (1,3,H,W)
-          (orig_w, orig_h) from the input image
-        """
+    def preprocess(self, image: ImageLike) -> Tuple[np.ndarray, Tuple[int, int]]:
         arr = self._load_to_numpy(image)
         orig_h, orig_w = arr.shape[:2]
         x = self._preprocess_numpy(arr)
         return x, (orig_w, orig_h)
 
-    def _load_to_numpy(self, image: Union[str, np.ndarray]) -> np.ndarray:
+    def preprocess_batch(self, images: Sequence[ImageLike]) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
+        if len(images) == 0:
+            raise ValueError("preprocess_batch(...) requires at least one image.")
+
+        x_list: List[np.ndarray] = []
+        orig_sizes: List[Tuple[int, int]] = []
+
+        for image in images:
+            arr = self._load_to_numpy(image)
+            orig_h, orig_w = arr.shape[:2]
+            x_list.append(self._preprocess_numpy(arr))
+            orig_sizes.append((orig_w, orig_h))
+
+        x_batch = np.concatenate(x_list, axis=0)
+        return x_batch.astype(np.float32, copy=False), orig_sizes
+
+    def _load_to_numpy(self, image: ImageLike) -> np.ndarray:
         if isinstance(image, str):
             bgr = cv2.imread(image, cv2.IMREAD_COLOR)
             if bgr is None:
@@ -236,18 +241,28 @@ class SSDInt8ONNXPredictorRaw:
         x = np.expand_dims(x, axis=0)
         return x.astype(np.float32, copy=False)
 
-    def _normalize_predict_output(self, pred: Any) -> Dict[str, torch.Tensor]:
-        if isinstance(pred, list):
-            if len(pred) == 0:
-                return {
-                    "labels": torch.empty((0,), dtype=torch.int64),
-                    "scores": torch.empty((0,), dtype=torch.float32),
-                    "boxes": torch.empty((0, 4), dtype=torch.float32),
-                }
-            pred = pred[0]
-
-        if not isinstance(pred, dict):
+    def _normalize_predict_output_batch(
+        self,
+        pred: Any,
+        expected_batch_size: int,
+    ) -> List[Dict[str, torch.Tensor]]:
+        if isinstance(pred, dict):
+            pred_list = [pred]
+        elif isinstance(pred, (list, tuple)):
+            pred_list = list(pred)
+        else:
             raise TypeError(f"Expected predict(...) to return dict or list[dict], got {type(pred)}")
+
+        if len(pred_list) != expected_batch_size:
+            raise ValueError(
+                f"predict(...) returned {len(pred_list)} outputs for batch size {expected_batch_size}."
+            )
+
+        return [self._normalize_single_pred_dict(p) for p in pred_list]
+
+    def _normalize_single_pred_dict(self, pred: Any) -> Dict[str, torch.Tensor]:
+        if not isinstance(pred, dict):
+            raise TypeError(f"Expected each prediction to be a dict, got {type(pred)}")
 
         req = {"labels", "scores", "boxes"}
         missing = req - set(pred.keys())
@@ -271,11 +286,33 @@ class SSDInt8ONNXPredictorRaw:
             "boxes": boxes,
         }
 
+    def _postprocess_single_result(
+        self,
+        pred: Dict[str, torch.Tensor],
+        orig_w: int,
+        orig_h: int,
+    ) -> Dict[str, Any]:
+        labels_raw = pred["labels"]
+        scores = pred["scores"]
+        boxes = pred["boxes"]
+
+        if boxes.numel() == 0:
+            return self._empty_result()
+
+        labels_np = labels_raw.detach().to("cpu", dtype=torch.int64).numpy().reshape(-1)
+        scores_np = scores.detach().to("cpu", dtype=torch.float32).numpy().reshape(-1)
+        boxes_np = boxes.detach().to("cpu", dtype=torch.float32).numpy().reshape(-1, 4)
+
+        boxes_np = self._scale_boxes_to_original(boxes_np, orig_w=orig_w, orig_h=orig_h)
+        labels_str = self._map_labels(labels_np)
+
+        return {
+            "labels": labels_str,
+            "scores": [float(s) for s in scores_np.tolist()],
+            "boxes": boxes_np.astype(np.float32, copy=False),
+        }
+
     def _scale_boxes_to_original(self, boxes_xyxy: np.ndarray, orig_w: int, orig_h: int) -> np.ndarray:
-        """
-        Assumes predict(...) boxes are in resized model-input pixel coordinates.
-        Rescales them to original image pixel coordinates.
-        """
         if boxes_xyxy.size == 0:
             return np.zeros((0, 4), dtype=np.float32)
 
@@ -288,8 +325,8 @@ class SSDInt8ONNXPredictorRaw:
         boxes[:, [1, 3]] *= sy
         return boxes
 
-    def _map_labels(self, labels_np: np.ndarray) -> list[str]:
-        labels_str: list[str] = []
+    def _map_labels(self, labels_np: np.ndarray) -> List[str]:
+        labels_str: List[str] = []
         for raw_i in labels_np.tolist():
             i = int(raw_i)
             if self.pred_labels_are_one_based:
