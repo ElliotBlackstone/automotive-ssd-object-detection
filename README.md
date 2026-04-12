@@ -105,7 +105,7 @@ The SSD detector is trained end-to-end in PyTorch using:
 
 For more details on the training method and results, see [`training.md`](./training.md).
 
-For a higher-level walkthrough of the model, see [`SSD_explained.ipynb`](./SSD_explained.ipynb).
+For a higher-level walkthrough of the model, see [`SSD_explained.md`](./SSD_explained.md).
 
 For setup and run instructions, see [`GettingStarted.md`](./GettingStarted.md).
 
