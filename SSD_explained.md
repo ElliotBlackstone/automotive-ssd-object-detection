@@ -93,14 +93,14 @@ What does NMS do?  Let's look at our model's predictions on the above image with
 
 ![Prediction without NMS](figures/pred_no_nms.gif)
 
-There can, and often will, be many priors that have a 'reasonable' overlap with a given GT object.  Our model should give a high classification score (above a user set `score threshold`) for many of the priors nearby a GT object.  For the image above, the model produces 9 predictions for this single car that surpass the `score threshold`.
+There can, and often will, be many priors that have a 'reasonable' overlap with a given GT object.  Our model should give a high classification score (above a user set `score threshold`) for many of the priors nearby a GT object.  For the image above, the model produces 48 predictions for this single car that surpass the `score threshold`.
 
 NMS chooses the prior with the highest classification score and then deletes (suppresses) other predictions that have a high Intersection over union (IoU) score with the top scoring prior.  This `NMS threshold` is a parameter that is chosen by the user.  For each selected box, we remove every remaining box whose IoU with it exceeds the `NMS threshold`; boxes whose IoU is below or equal to the threshold survive to the next step. Therefore, lowering the threshold makes NMS more aggressive (fewer boxes left), and raising it makes NMS less aggressive.
 
 ![Prediction with NMS](figures/pred_after_nms.png)
 ![Prediction with NMS, threshold too high](figures/pred_nms_thresh_too_high.png)
 
-In the figure above on the right, we can see what happens if the `NMS threshold` is too high.  It is to be noted that better predictions appeared in the .gif above that got suppressed but this is due to poor performance of the model and not the implementation of NMS.
+In the figure above on the right, we can see what happens if the `NMS threshold` is too high.
 
 
 ### How is the model trained?
