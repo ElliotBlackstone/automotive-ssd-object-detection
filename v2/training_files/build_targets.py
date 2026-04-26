@@ -88,19 +88,6 @@ def build_targets(priors_cxcywh: torch.Tensor,
     matched_labels = gt_labels_pad.gather(1, best_gt_per_prior)
     cls_t[pos_mask] = matched_labels[pos_mask] + 1
 
-    # gt_boxes_matched = gt_boxes_pad.gather(1, best_gt_per_prior.unsqueeze(-1).expand(B, P, 4))
-    # priors_exp = priors_cxcywh.unsqueeze(0).expand(B, P, 4)
-
-    # v_c, v_s = variances
-    # gt_cxy = 0.5 * (gt_boxes_matched[..., :2] + gt_boxes_matched[..., 2:])
-    # gt_wh  = gt_boxes_matched[..., 2:] - gt_boxes_matched[..., :2]
-
-    # t_xy = (gt_cxy - priors_exp[..., :2]) / priors_exp[..., 2:] / v_c
-    # t_wh = torch.log((gt_wh / priors_exp[..., 2:]).clamp_min(1e-12)) / v_s
-
-    # loc_all = torch.cat((t_xy, t_wh), dim=-1)
-    # loc_t_pm = loc_all[pos_mask]
-
 
     # Encode only positive priors.
     # This preserves the same ordering as the old loc_all[pos_mask]:
