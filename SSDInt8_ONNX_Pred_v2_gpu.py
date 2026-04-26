@@ -229,8 +229,14 @@ class SSDInt8ONNXPredictorRaw:
         if len(images) == 0:
             raise ValueError("preprocess_batch(...) requires at least one image.")
 
-        x_list: List[np.ndarray] = []
-        orig_sizes: List[Tuple[int, int]] = []
+        if len(images) == 1:
+            arr = self._load_to_numpy(images[0])
+            orig_h, orig_w = arr.shape[:2]
+            x = self._preprocess_numpy(arr)
+            return x, [(orig_w, orig_h)]
+
+        x_list = []
+        orig_sizes = []
 
         for image in images:
             arr = self._load_to_numpy(image)
@@ -263,32 +269,25 @@ class SSDInt8ONNXPredictorRaw:
         color = self.pre_cfg.input_color.lower()
         if color == "bgr":
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        elif color == "rgb":
-            pass
-        else:
+        elif color != "rgb":
             raise ValueError(
                 f"preprocess_cfg.input_color must be 'bgr' or 'rgb', got {self.pre_cfg.input_color}"
             )
 
-        if img.dtype == np.uint8:
-            x = img.astype(np.float32) / 255.0
-        else:
-            x = img.astype(np.float32)
-            mx = float(np.nanmax(x))
-            if mx > 1.5:
-                x = x / 255.0
-            x = np.nan_to_num(x, nan=0.0, posinf=1.0, neginf=0.0)
-
         Ht, Wt = self.pre_cfg.resize_hw
-        h, w = x.shape[:2]
+        h, w = img.shape[:2]
         if (h, w) != (Ht, Wt):
             interp = cv2.INTER_AREA if (h > Ht or w > Wt) else cv2.INTER_LINEAR
-            x = cv2.resize(x, (Wt, Ht), interpolation=interp)
+            img = cv2.resize(img, (Wt, Ht), interpolation=interp)
 
-        x = (x - self._mean) / self._std
+        x = img.astype(np.float32)
+        x *= 1.0 / 255.0
+        x -= self._mean
+        x /= self._std
+
         x = np.transpose(x, (2, 0, 1))
-        x = np.expand_dims(x, axis=0)
-        return x.astype(np.float32, copy=False)
+        x = np.ascontiguousarray(x[None, :, :, :], dtype=np.float32)
+        return x
 
     def _normalize_predict_output_batch(
         self,
