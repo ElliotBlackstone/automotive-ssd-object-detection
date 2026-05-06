@@ -61,7 +61,20 @@ def draw_predictions_bgr(
     return out
 
 
-def open_camera(source, backend: str):
+
+def fourcc_to_str(fourcc_float: float) -> str:
+    fourcc = int(fourcc_float)
+    return "".join(chr((fourcc >> 8 * i) & 0xFF) for i in range(4))
+
+
+def open_camera(
+    source,
+    backend: str = "auto",
+    width: int = 640,
+    height: int = 480,
+    fps: float = 30.0,
+    fourcc: str = "MJPG",
+):
     backend_map = {
         "any": cv2.CAP_ANY,
         "dshow": cv2.CAP_DSHOW,
@@ -73,26 +86,93 @@ def open_camera(source, backend: str):
     sysname = platform.system().lower()
 
     if backend != "auto":
+        if backend not in backend_map:
+            raise ValueError(f"Unknown backend: {backend!r}")
         trial = [backend]
     else:
         if sysname == "windows":
             trial = ["dshow", "msmf", "any"]
         elif sysname == "linux":
-            trial = ["v4l2", "gstreamer", "any"]
+            # Prefer V4L2 for normal USB webcams.
+            trial = ["v4l2", "any"]
         else:
             trial = ["any"]
 
     last_err = None
+
     for b in trial:
         cap = cv2.VideoCapture(source, backend_map[b])
-        if cap.isOpened():
-            return cap, b
-        last_err = b
-        cap.release()
+
+        if not cap.isOpened():
+            last_err = b
+            cap.release()
+            continue
+
+        # Important for low-latency real-time capture.
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        # Important: request compressed USB camera format before resolution/FPS.
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        cap.set(cv2.CAP_PROP_FPS, fps)
+
+        # Warm up a few frames after mode negotiation.
+        for _ in range(5):
+            cap.read()
+
+        actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        actual_fps = cap.get(cv2.CAP_PROP_FPS)
+        actual_fourcc = fourcc_to_str(cap.get(cv2.CAP_PROP_FOURCC))
+
+        print(
+            f"Opened camera source={source!r} backend={b} "
+            f"requested={width}x{height}@{fps} {fourcc}, "
+            f"actual={actual_width:.0f}x{actual_height:.0f}@{actual_fps:.2f} {actual_fourcc!r}"
+        )
+
+        return cap, b
 
     raise RuntimeError(
-        f"Could not open camera source={source!r} with backends={trial} (last tried: {last_err})"
+        f"Could not open camera source={source!r} with backends={trial} "
+        f"(last tried: {last_err})"
     )
+
+
+
+# def open_camera(source, backend: str):
+#     backend_map = {
+#         "any": cv2.CAP_ANY,
+#         "dshow": cv2.CAP_DSHOW,
+#         "msmf": cv2.CAP_MSMF,
+#         "v4l2": cv2.CAP_V4L2,
+#         "gstreamer": cv2.CAP_GSTREAMER,
+#     }
+
+#     sysname = platform.system().lower()
+
+#     if backend != "auto":
+#         trial = [backend]
+#     else:
+#         if sysname == "windows":
+#             trial = ["dshow", "msmf", "any"]
+#         elif sysname == "linux":
+#             trial = ["v4l2", "gstreamer", "any"]
+#         else:
+#             trial = ["any"]
+
+#     last_err = None
+#     for b in trial:
+#         cap = cv2.VideoCapture(source, backend_map[b])
+#         if cap.isOpened():
+#             return cap, b
+#         last_err = b
+#         cap.release()
+
+#     raise RuntimeError(
+#         f"Could not open camera source={source!r} with backends={trial} (last tried: {last_err})"
+#     )
 
 
 def open_video_writer(out_path: str, fps: float, frame_size: Tuple[int, int]):
