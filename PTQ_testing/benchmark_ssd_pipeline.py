@@ -28,6 +28,17 @@ python PTQ_testing/benchmark_ssd_pipeline.py \
     --ort-provider cpu \
     --pyt-model-version 2
 
+# windows
+python PTQ_testing/benchmark_ssd_pipeline.py `
+    --pytorch-pth "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\v2\\saved_models\\DIoU_mAP_551_iou_thresh_45_max_img_per_det_200.pth" `
+    --onnx-raw "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\PTQ_testing\\ssd_int8_v2.onnx" `
+    --onnx-e2e "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\PTQ_testing\\ssd_int8_with_pre_post.onnx" `
+    --image "C:\\Udacity_car_data\data\\test\\1478020441702436005_jpg.rf.2tMFzQOxSFdtoIPC2DaC.jpg" `
+    --torch-device cuda `
+    --ort-provider cuda `
+    --pyt-model-version 2
+
+
 python PTQ_testing/benchmark_ssd_pipeline.py \
     --pytorch-pth /home/eblackstone/repos/automotive-ssd-object-detection/app_files/saved_models/noZoomOut_Bootstrap.pth \
     --onnx-raw /home/eblackstone/repos/automotive-ssd-object-detection/PTQ_testing/ssd_int8.onnx \
@@ -266,9 +277,11 @@ def make_ort_session(model_path: str, provider: str) -> ort.InferenceSession:
     avail = ort.get_available_providers()
 
     if provider == "cuda":
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        providers = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
         if "CUDAExecutionProvider" not in avail:
             raise RuntimeError(f"Requested ORT CUDA provider, but available providers are: {avail}")
+    elif provider == "tensorrt":
+        providers = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
     elif provider == "cpu":
         providers = ["CPUExecutionProvider"]
     else:
@@ -495,7 +508,7 @@ def main():
     parser.add_argument("--input-height", type=int, default=300)
 
     parser.add_argument("--torch-device", type=str, default="cpu", choices=["cpu", "cuda"])
-    parser.add_argument("--ort-provider", type=str, default="cpu", choices=["cpu", "cuda"])
+    parser.add_argument("--ort-provider", type=str, default="cpu", choices=["cpu", "cuda", "tensorrt"])
     parser.add_argument("--pyt-model-version", type=int, default=2)
 
     parser.add_argument("--score-thresh", type=float, default=0.2)
