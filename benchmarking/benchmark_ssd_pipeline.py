@@ -1,4 +1,4 @@
-"""
+r"""
 Benchmark SSD pipeline stage timings for:
 1) Pure PyTorch
 2) Raw ONNX forward + PyTorch postprocess
@@ -19,7 +19,7 @@ Assumptions:
 Usage examples:
 
 # From one image:
-python PTQ_testing/benchmark_ssd_pipeline.py \
+python benchmarking/benchmark_ssd_pipeline.py \
     --pytorch-pth /home/eblackstone/repos/automotive-ssd-object-detection/v2/saved_models/DIoU_mAP_551_iou_thresh_45_max_img_per_det_200.pth \
     --onnx-raw /home/eblackstone/repos/automotive-ssd-object-detection/PTQ_testing/ssd_int8_v2.onnx \
     --onnx-e2e /home/eblackstone/repos/automotive-ssd-object-detection/PTQ_testing/ssd_int8_with_pre_post.onnx \
@@ -29,7 +29,7 @@ python PTQ_testing/benchmark_ssd_pipeline.py \
     --pyt-model-version 2
 
 # windows
-python PTQ_testing/benchmark_ssd_pipeline.py `
+python "benchmarking\\benchmark_ssd_pipeline.py" `
     --pytorch-pth "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\v2\\saved_models\\DIoU_mAP_551_iou_thresh_45_max_img_per_det_200.pth" `
     --onnx-raw "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\PTQ_testing\\ssd_int8_v2.onnx" `
     --onnx-e2e "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\PTQ_testing\\ssd_int8_with_pre_post.onnx" `
@@ -39,7 +39,7 @@ python PTQ_testing/benchmark_ssd_pipeline.py `
     --pyt-model-version 2
 
 
-python PTQ_testing/benchmark_ssd_pipeline.py \
+python benchmarking/benchmark_ssd_pipeline.py \
     --pytorch-pth /home/eblackstone/repos/automotive-ssd-object-detection/app_files/saved_models/noZoomOut_Bootstrap.pth \
     --onnx-raw /home/eblackstone/repos/automotive-ssd-object-detection/PTQ_testing/ssd_int8.onnx \
     --onnx-e2e /home/eblackstone/repos/automotive-ssd-object-detection/PTQ_testing/ssd_int8_with_pre_post.onnx \
@@ -49,7 +49,7 @@ python PTQ_testing/benchmark_ssd_pipeline.py \
     --pyt-model-version 1
 
 # From webcam:
-python benchmark_ssd_pipeline.py \
+python benchmarking\\benchmark_ssd_pipeline.py \
     --pytorch-pth /path/to/model.pth \
     --onnx-raw /path/to/ssd_raw.onnx \
     --onnx-e2e /path/to/ssd_stitched.onnx \
