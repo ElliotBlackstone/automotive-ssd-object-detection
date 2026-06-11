@@ -49,10 +49,11 @@ python benchmarking/benchmark_ssd_pipeline.py \
     --pyt-model-version 1
 
 # From webcam:
-python benchmarking\\benchmark_ssd_pipeline.py \
-    --pytorch-pth /path/to/model.pth \
-    --onnx-raw /path/to/ssd_raw.onnx \
-    --onnx-e2e /path/to/ssd_stitched.onnx \
+(windows)
+python benchmarking\\benchmark_ssd_pipeline.py `
+    --pytorch-pth "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\v2\\saved_models\\DIoU_mAP_551_iou_thresh_45_max_img_per_det_200.pth" `
+    --onnx-raw "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\PTQ_testing\\ssd_int8_v2.onnx" `
+    --onnx-e2e "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\PTQ_testing\\ssd_int8_with_pre_post.onnx" `
     --camera 0
 """
 
