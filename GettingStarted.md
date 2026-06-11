@@ -33,17 +33,12 @@ After activation, your shell prompt should show `(.venv)`.
 
 #### 3. Install PyTorch
 
-This repository uses PyTorch for training and PyTorch-based inference. If you want GPU support, install a CUDA-enabled PyTorch build before installing the rest of the requirements.
+This repository uses PyTorch for training and PyTorch-based inference. If you want GPU support, install a CUDA-enabled PyTorch build before installing the rest of the requirements.  CPU only users can skip this step.
 
 Choose the correct command for your operating system and CUDA version from the official PyTorch install selector:
 
 ```text
 https://pytorch.org/get-started/locally/
-```
-
-For CPU only PyTorch:
-```bash
-python -m pip install torch torchvision
 ```
 
 For a pip install with CUDA 12.8, the command is typically:
@@ -62,15 +57,14 @@ python -c "import torch; print(torch.__version__); print('CUDA available:', torc
 
 #### 4. Install the remaining dependencies
 
-PyTorch (CPU or GPU) must be installed first.
-
 All Python dependencies are listed in `requirements.txt`.
 
 ```bash
-python -m pip install --no-build-isolation -r requirements.txt
+python -m pip install -r requirements.txt
+python -m pip install --no-build-isolation --no-deps git+https://github.com/ElliotBlackstone/gen-nms-package.git
 ```
 
-The `--no-build-isolation` flag is used because this project depends on `gen-nms-package`, a custom NMS package installed from GitHub. That package may need access to the already-installed PyTorch build when it is built.
+The `--no-build-isolation` flag is used because this project depends on `gen-nms-package`, a custom NMS package installed from GitHub. That package needs access to the already-installed PyTorch build when it is built.
 
 Check dependency consistency:
 
