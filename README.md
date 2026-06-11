@@ -20,26 +20,26 @@ The project also includes:
 
 ```text
 .
-├── v1/                           # Original baseline SSD code
-├── v2/                           # Newer codebase
-│   ├── model_files/              # SSD model, priors, encode/decode, NMS helpers, visualization
-│   └── training_files/           # Training loop, dataloaders, losses, profiling, checkpoints
-├── PTQ_testing/                  # ONNX export, parity tests, PTQ, evaluation, benchmark scripts
-├── benchmarking/                 # DataLoader and training/inference benchmark utilities
-├── docs/                         # GitHub pages website files
-├── app_files/                    # Earlier FastAPI + Docker web demo code
-├── figures/                      # Figures and plots
-├── papers/                       # Reference material
-├── EDA_car.ipynb                 # Dataset exploration
-├── SSD_explained.md              # High-level SSD explanation
-├── v1_vs_v2.ipynb                # Version comparison notebook
-├── SSDInt8_ONNX_Pred.py          # ONNX int8 predictor
-├── SSDInt8_ONNX_Pred_v2.py       # ONNX int8 predictor for v2 workflow
-├── SSD_int8_realtime_video.py    # Live webcam demo script using v1 model
-├── SSD_int8_realtime_video_v2.py # Live webcam demo script using v2 model
-├── SSD_video_predict.py          # Video-file inference utility
-├── GettingStarted.md             # Setup and usage notes
-└── training.md                   # Training details, results, and plots
+├── v1/                               # Original baseline SSD code
+├── v2/                               # Newer codebase
+│   ├── model_files/                  # SSD model, priors, encode/decode, NMS helpers, visualization
+│   └── training_files/               # Training loop, dataloaders, losses, profiling, checkpoints
+├── PTQ_testing/                      # ONNX export, parity tests, PTQ, evaluation, benchmark scripts
+├── benchmarking/                     # DataLoader and training/inference benchmark utilities
+├── docs/                             # GitHub pages website files
+├── app_files/                        # Earlier FastAPI + Docker web demo code
+├── figures/                          # Figures and plots
+├── papers/                           # Reference material
+├── EDA_car.ipynb                     # Dataset exploration
+├── SSD_explained.md                  # High-level SSD explanation
+├── smoke_test_requirements.py        # Checks local environment
+├── SSDInt8_ONNX_Pred.py              # ONNX int8 predictor
+├── SSDInt8_ONNX_Pred_v2.py           # ONNX int8 predictor for v2 workflow
+├── SSD_int8_realtime_video.py        # Live webcam demo script using v1 model, CPU, ONNX
+├── SSD_int8_realtime_video_v2.py     # Live webcam demo script using v2 model, CPU, ONNX
+├── SSD_fp32_realtime_video_v2_gpu.py # Live webcam demo script using v2 model, GPU
+├── GettingStarted.md                 # Setup and usage notes
+└── training.md                       # Training details, results, and plots
 ```
 
 ## Dataset
