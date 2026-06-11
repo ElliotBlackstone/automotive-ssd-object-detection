@@ -1,0 +1,35 @@
+# requirements.in
+#
+# Simple dependency file for this repo.
+#
+# Notes:
+# - Includes both PyTorch and ONNX dependencies for convenience.
+# - ONNX Runtime usage is intended to be CPU-only.
+# - PyTorch GPU support depends on installing a CUDA-enabled PyTorch build.
+# - `gen-nms-package` is not available on PyPI, see 
+# https://github.com/ElliotBlackstone/gen-nms-package for installation instructions.
+
+# PyTorch model training / inference
+torch
+torchvision
+
+# ONNX export / inference / quantization
+onnx
+onnxruntime
+
+# Core numeric / image processing
+numpy
+opencv-python
+pillow
+
+# API / demo serving
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Evaluation / plotting / notebooks / utilities
+matplotlib
+pandas
+scikit-learn
+tqdm
+jupyter
