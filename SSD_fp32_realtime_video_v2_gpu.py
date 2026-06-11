@@ -2,32 +2,24 @@
 Real-time webcam/video inference for the standard PyTorch FP32 SSD model.
 
 This is the PyTorch FP32 analogue of SSD_int8_realtime_video_v2_gpu.py.
-It preserves the camera, batching, drawing, FPS display, and optional video-save
-logic, but replaces the ONNX Runtime INT8 predictor with a pure PyTorch model.
-
-Expected project layout when this script lives in PTQ_testing/:
-    repo_root/
-      v1/SSD_from_scratch.py
-      v2/model_files/SSD_from_scratch.py
-      PTQ_testing/SSD_fp32_pytorch_realtime_video_v2_gpu.py
 
 Example usage:
     (windows)
-    python SSD_fp32_pytorch_realtime_video_v2_gpu.py `
+    python SSD_fp32_realtime_video_v2_gpu.py `
         --model "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\v2\\saved_models\\DIoU_mAP_551_iou_thresh_45_max_img_per_det_200.pth" `
         --device cuda `
         --pyt-model-version 2 `
         --show-fps `
         --batch-size 1
 
-    python SSD_fp32_pytorch_realtime_video_v2_gpu.py `
+    python SSD_fp32_realtime_video_v2_gpu.py `
         --model "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\app_files\\saved_models\\noZoomOut_Bootstrap.pth" `
         --device cuda `
         --pyt-model-version 1 `
         --show-fps `
         --batch-size 1
 
-    python SSD_fp32_pytorch_realtime_video_v2_gpu.py \
+    python SSD_fp32_realtime_video_v2_gpu.py \
         --model /path/to/noZoomOut_Bootstrap.pth \
         --device cpu \
         --pyt-model-version 1 \
