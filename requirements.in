@@ -33,3 +33,5 @@ pandas
 scikit-learn
 tqdm
 jupyter
+
+gen-nms-package @ git+https://github.com/ElliotBlackstone/gen-nms-package.git
