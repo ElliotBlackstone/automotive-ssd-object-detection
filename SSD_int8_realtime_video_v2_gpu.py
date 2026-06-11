@@ -141,40 +141,6 @@ def open_camera(
 
 
 
-# def open_camera(source, backend: str):
-#     backend_map = {
-#         "any": cv2.CAP_ANY,
-#         "dshow": cv2.CAP_DSHOW,
-#         "msmf": cv2.CAP_MSMF,
-#         "v4l2": cv2.CAP_V4L2,
-#         "gstreamer": cv2.CAP_GSTREAMER,
-#     }
-
-#     sysname = platform.system().lower()
-
-#     if backend != "auto":
-#         trial = [backend]
-#     else:
-#         if sysname == "windows":
-#             trial = ["dshow", "msmf", "any"]
-#         elif sysname == "linux":
-#             trial = ["v4l2", "gstreamer", "any"]
-#         else:
-#             trial = ["any"]
-
-#     last_err = None
-#     for b in trial:
-#         cap = cv2.VideoCapture(source, backend_map[b])
-#         if cap.isOpened():
-#             return cap, b
-#         last_err = b
-#         cap.release()
-
-#     raise RuntimeError(
-#         f"Could not open camera source={source!r} with backends={trial} (last tried: {last_err})"
-#     )
-
-
 def open_video_writer(out_path: str, fps: float, frame_size: Tuple[int, int]):
     """Open a writer. Prefer mp4v for .mp4, otherwise fall back to XVID .avi."""
     out_path = str(out_path)
