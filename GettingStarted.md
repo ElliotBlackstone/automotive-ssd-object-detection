@@ -41,13 +41,16 @@ Choose the correct command for your operating system and CUDA version from the o
 https://pytorch.org/get-started/locally/
 ```
 
-For example, for a pip install with CUDA 12.8, the command is typically:
+For CPU only PyTorch:
+```bash
+python -m pip install torch torchvision
+```
+
+For a pip install with CUDA 12.8, the command is typically:
 
 ```bash
 python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
-
-If you only need CPU support, you can skip the CUDA-specific install command and let `requirements.txt` install the default PyTorch packages.
 
 To verify the PyTorch install:
 
@@ -58,6 +61,8 @@ python -c "import torch; print(torch.__version__); print('CUDA available:', torc
 `CUDA available: True` is expected only if you installed a CUDA-enabled PyTorch build on a machine with a compatible NVIDIA GPU/driver.
 
 #### 4. Install the remaining dependencies
+
+PyTorch (CPU or GPU) must be installed first.
 
 All Python dependencies are listed in `requirements.txt`.
 
