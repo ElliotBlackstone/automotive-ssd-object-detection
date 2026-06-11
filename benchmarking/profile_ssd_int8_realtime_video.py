@@ -20,6 +20,17 @@ Example camera run:
       --warmup-batches 10 \
       --profile-batches 200 \
       --csv profile_cuda_b1.csv
+    
+  (windows)
+  python benchmarking\\profile_ssd_int8_realtime_video.py `
+      --model "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\PTQ_testing\\ssd_int8_v2.onnx" `
+      --device cpu `
+      --camera 0 `
+      --batch-size 1 `
+      --warmup-batches 10 `
+      --profile-batches 200 `
+      --csv profile_cpu_b1.csv
+  
 
 Example synthetic run to remove camera/display effects:
   python profile_ssd_int8_realtime_video.py \
@@ -58,6 +69,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 from SSDInt8_ONNX_Pred_v2_gpu import SSDInt8ONNXPredictorRaw, PreprocessConfig
 
