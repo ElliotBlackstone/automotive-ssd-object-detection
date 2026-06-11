@@ -14,6 +14,15 @@ from SSDInt8_ONNX_Pred_v2 import SSDInt8ONNXPredictorRaw, PreprocessConfig
 # python SSD_int8_realtime_video_v2.py --model C:\path\to\ssd_int8_v2.onnx --show-fps --batch-size 4
 # python SSD_int8_realtime_video_v2.py --model C:\path\to\ssd_int8_v2.onnx --show-fps --save-video --record-fps 15 --batch-size 2
 
+r"""
+Example usage:
+    (windows)
+    python SSD_int8_realtime_video_v2.py `
+        --model "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\PTQ_testing\\ssd_int8_v2.onnx" `
+        --show-fps `
+        --batch-size 1
+"""
+
 
 def draw_predictions_bgr(
     frame_bgr: np.ndarray,
