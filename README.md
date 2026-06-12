@@ -148,8 +148,9 @@ The root directory now includes scripts for:
 - **real-time webcam/video-stream detection**
   - [`SSD_int8_realtime_video.py`](./SSD_int8_realtime_video.py)
   - [`SSD_int8_realtime_video_v2.py`](./SSD_int8_realtime_video_v2.py)
+  - [`SSD_fp32_realtime_video_v2_gpu.py`](./SSD_fp32_realtime_video_v2_gpu.py)
 - **video-file inference**
-  - [`SSD_video_predict.py`](./SSD_video_predict.py)
+  - [`SSD_video_predict.py`](./v1/SSD_video_predict.py)
 
 These scripts shift the project beyond offline notebook evaluation and toward practical local deployment.
 
@@ -163,10 +164,9 @@ The repository now also emphasizes **local inference**, **ONNX/PTQ**, and **real
 
 The repository contains several notebooks that are useful for understanding how the project evolved:
 
-- [`SSD_model_compare.ipynb`](./SSD_model_compare.ipynb)
-- [`v1_vs_v2.ipynb`](./v1_vs_v2.ipynb)
-- [`SSD_inference_profiling.ipynb`](./SSD_inference_profiling.ipynb)
-- [`int8_model_testing.ipynb`](./int8_model_testing.ipynb)
+- [`SSD_model_compare.ipynb`](./benchmarking/SSD_model_compare.ipynb)
+- [`v1_vs_v2.ipynb`](./benchmarking/v1_vs_v2.ipynb)
+- [`benchmark_ssd_pipeline.py`](./benchmarking/benchmark_ssd_pipeline.py)
 
 These are the best places to document detailed experiment results, plots, and version-to-version comparisons without overloading the top-level README.
 
