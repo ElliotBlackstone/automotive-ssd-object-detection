@@ -20,7 +20,7 @@ Example usage:
         --batch-size 1
 
     python SSD_fp32_realtime_video_v2_gpu.py \
-        --model /path/to/noZoomOut_Bootstrap.pth \
+        --model "C:\\Users\\eblac\\Documents\\GitHub\\self-driving-car\\app_files\\saved_models\\noZoomOut_Bootstrap.pth" \
         --device cpu \
         --pyt-model-version 1 \
         --save-video \
