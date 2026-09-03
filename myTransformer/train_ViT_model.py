@@ -14,7 +14,9 @@ from sched_optim import build_optimizer_and_scheduler
 from build_dataloaders_ViT import build_train_dl
 from plot_losses import plot_losses
 
-sys.path.append(str(Path.cwd().parent / "self-driving-car"))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 from v2.training_files.save_load_ckpt import load_checkpoint
 
 
@@ -67,7 +69,7 @@ optimizer, scheduler = build_optimizer_and_scheduler(model=ViTmodel,
 
 scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
 
-resume_path = Path("C:/Users/eblac/Documents/GitHub/myTransformer/saved_models/last.ckpt")
+resume_path = REPO_ROOT / "myTransformer" / "saved_models" / "last.ckpt"
 # Path.home() / "repos" / "automotive-ssd-object-detection" / "v2" / "saved_models" / "last.ckpt"
 if resume_path.exists():
     start_epoch, best_map, loss_dict = load_checkpoint(
@@ -108,7 +110,7 @@ def main():
                         save_model=True,
                         save_best_model=True,
                         epoch_save_interval=None,
-                        SAVE_DIR=Path("C:/Users/eblac/Documents/GitHub/myTransformer/saved_models"),
+                        SAVE_DIR=REPO_ROOT / "myTransformer" / "saved_models",
                         timing=False,
                         past_train_dict=loss_dict,
                         compute_mAP_train=False,

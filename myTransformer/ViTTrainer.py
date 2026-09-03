@@ -8,7 +8,9 @@ from myViT import VisionTransformer
 from myTrainStep import myTrainStep
 from myTestStep import myTestStep
 
-sys.path.append(str(Path.cwd().parent / "self-driving-car"))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 from v2.training_files.save_load_ckpt import save_checkpoint
 from v2.training_files.merge_dicts import merge_dicts_preserve_order
 

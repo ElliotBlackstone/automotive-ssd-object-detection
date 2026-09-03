@@ -7,7 +7,9 @@ from typing import Tuple
 from pathlib import Path
 import sys
 
-sys.path.append(str(Path.cwd().parent / "self-driving-car"))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 from v2.training_files.CondIoUCrop import ConditionalIoUCrop
 from v2.CarImageClass import ImageClass, make_train_test_split
 

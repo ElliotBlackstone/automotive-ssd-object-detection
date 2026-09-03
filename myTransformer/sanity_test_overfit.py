@@ -108,9 +108,9 @@ def load_fixed_samples(
     dataset_seed: int = 724,
 ) -> tuple[list[tuple[torch.Tensor, dict]], list[int]]:
     """Load and freeze the same unaugmented subset used in the notebook."""
-    sibling_repo = Path(__file__).resolve().parent.parent / "self-driving-car"
-    if str(sibling_repo) not in sys.path:
-        sys.path.append(str(sibling_repo))
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
     from v2.CarImageClass import ImageClass
 
