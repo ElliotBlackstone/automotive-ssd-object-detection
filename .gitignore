@@ -5,3 +5,5 @@ __pycache__/
 *.mp4
 v2/saved_models/
 v2/training_files/tb_profiler/
+myTransformer/saved_models
+myTransformer/__pycache__

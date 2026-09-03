@@ -1,0 +1,271 @@
+import torch
+import sys
+from pathlib import Path
+from typing import Dict
+from tqdm.auto import tqdm
+
+from myViT import VisionTransformer
+from myTrainStep import myTrainStep
+from myTestStep import myTestStep
+
+sys.path.append(str(Path.cwd().parent / "self-driving-car"))
+from v2.training_files.save_load_ckpt import save_checkpoint
+from v2.training_files.merge_dicts import merge_dicts_preserve_order
+
+
+
+def ViT_train(model: VisionTransformer,
+              train_dataloader: torch.utils.data.DataLoader,
+              test_dataloader: torch.utils.data.DataLoader,
+              optimizer: torch.optim.Optimizer,
+              lambda_CE: float = 0.4,
+              lambda_L1: float = 0.2,
+              lambda_GIoU: float=0.4,
+              lambda_CE_HM: float = 0.4,
+              lambda_L1_HM: float = 0.2,
+              lambda_GIoU_HM: float=0.4,
+              scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+              scaler: torch.amp.GradScaler | None = None,
+              sched_step_w_opt: bool = False,
+              epochs: int = 5,
+              early_stopping_rounds: int | None = None,
+              device: str | torch.device = 'cpu',
+              save_model: bool = False,
+              save_best_model: bool = True,
+              epoch_save_interval: int | None = None,
+              SAVE_DIR: Path | None = None,
+              timing: bool = False,
+              past_train_dict: Dict | None = None,
+              compute_mAP_train: bool = False,
+              compute_mAP_test: bool = False,
+              include_test_step: bool = True,
+              bg_weight: float = 0.1,
+              aux_loss_weight: float = 1.0,
+              grad_clip_val: float = 1.0,
+              ) -> Dict:
+    """
+    Inputs
+    model: mySSD model to be trained/tested
+    train_dataloader: Data on which the model is to be trained
+    test_dataloader: Data on which the model is to be tested
+    optimizer: Optimizer, e.g. SGD, Adam, etc.
+    scheduler:
+    scaler: 
+    sched_step_w_opt: 
+    epochs: Integer number (>0) of train/test cycles
+    early_stopping_rounds: Integer or None. Stop the train/test cycle if the testing score
+                           has not gone down in the past 'early_stopping_rounds' cycles.
+                           None by default (disabled).
+    device: 'cpu' or 'cuda'
+    save_model: Boolean, True to save model
+    save_best_model: Boolean, True to save best model during the train/test cycles
+    epoch_save_interval: Integer or None.  If int, save model every 'epoch_save_interval' cycles.
+    SAVE_DIR: File path to save location
+    timing: Boolean for enabling/disabling timing
+    past_train_dict: Dictionary or None.  If not None, dictionary of past training results.
+    compute_mAP: True - compute mAP, False - skip
+
+    Outputs
+    Dictonary with train+test localization loss, train+test classification loss,
+    train+test total loss (sum of loc+cls loss), test mAP, epcohs, train+test timing results
+    """
+    device = torch.device(device)
+    # device check
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA device requested, but CUDA is not available.")
+
+    if device.type not in ("cpu", "cuda"):
+        raise ValueError(f"Unsupported device type: {device.type}")
+    
+    if save_model and SAVE_DIR is None:
+        raise TypeError("If the model is to be saved, SAVE_DIR must be specified.")
+    
+    
+    if past_train_dict is not None and past_train_dict["mAP test"]:
+        best_metric = max(past_train_dict["mAP test"])
+    else:
+        best_metric = None
+        
+    conseq_rounds = 0
+    
+    if past_train_dict is not None:
+        past_epochs = past_train_dict['epochs'][0]
+    else:
+        past_epochs = 0
+    
+    # create results dictionary
+    results = {"train_loss": [],
+               "train_loss_loc": [],
+               "train_loss_conf": [],
+               "train_loss_GIoU": [],
+               "test_loss": [],
+               "test_loss_loc": [],
+               "test_loss_conf": [],
+               "test_loss_GIoU": [],
+               "mAP train": [],
+               "mAP test": [],
+               "epochs": [past_epochs],
+               "training timing": [],
+               "testing timing": [],}
+    
+    for epoch in tqdm(range(epochs)):
+        current_epoch = past_epochs + epoch + 1
+
+        train_step_scheduler = scheduler if sched_step_w_opt else None
+
+        train_dict = myTrainStep(model=model,
+                                 dataloader=train_dataloader,
+                                 optimizer=optimizer,
+                                 lambda_CE=lambda_CE,
+                                 lambda_L1=lambda_L1,
+                                 lambda_GIoU=lambda_GIoU,
+                                 lambda_CE_HM=lambda_CE_HM,
+                                 lambda_L1_HM=lambda_L1_HM,
+                                 lambda_GIoU_HM=lambda_GIoU_HM,
+                                 device=device,
+                                 timing=timing,
+                                 scheduler=train_step_scheduler,
+                                 scaler=scaler,
+                                 compute_mAP=compute_mAP_train,
+                                 bg_weight=bg_weight,
+                                 aux_loss_weight=aux_loss_weight,
+                                 grad_clip_val=grad_clip_val,
+                                 )
+
+        if include_test_step:
+            test_dict = myTestStep(model=model,
+                                    dataloader=test_dataloader,
+                                    lambda_CE=lambda_CE,
+                                    lambda_L1=lambda_L1,
+                                    lambda_GIoU=lambda_GIoU,
+                                    lambda_CE_HM=lambda_CE_HM,
+                                    lambda_L1_HM=lambda_L1_HM,
+                                    lambda_GIoU_HM=lambda_GIoU_HM,
+                                    device=device,
+                                    timing=timing,
+                                    compute_mAP=compute_mAP_test,
+                                    bg_weight=bg_weight,
+                                    aux_loss_weight=aux_loss_weight,
+                                    )
+        else:
+            test_dict = {"testing loss": 0.0,
+                         "localization loss": 0.0,
+                         "classification loss": 0.0,
+                         "GIoU loss": 0.0,
+                         "timing": 0.0,
+                         "mAP test": 0.0}
+        
+        val_err = test_dict["testing loss"]
+        
+        if scheduler is not None and not sched_step_w_opt:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_err)
+            else:
+                scheduler.step()
+
+        if include_test_step:
+            mAP_score = test_dict['mAP']['map_50'].item() if compute_mAP_test else 0.0
+        else:
+            mAP_score = train_dict['mAP']['map_50'].item() if compute_mAP_train else 0.0
+        
+        print(f"Epoch: {current_epoch}  |  mAP: {mAP_score:.4f}  |  Train L1 loss: {train_dict['localization loss']:.4f}  |  Train CE loss: {train_dict['classification loss']:.4f}  |  Train GIoU loss: {train_dict['GIoU loss']:.4f}  |  Test L1 loss: {test_dict['localization loss']:.4f}  |  Test CE loss: {test_dict['classification loss']:.4f}  |  Test GIoU loss: {test_dict['GIoU loss']:.4f}  ")
+
+        # update results dictionary
+        results['train_loss'].append(train_dict['training loss'])
+        results['train_loss_loc'].append(train_dict['localization loss'])
+        results['train_loss_conf'].append(train_dict['classification loss'])
+        results['train_loss_GIoU'].append(train_dict['GIoU loss'])
+        results['test_loss'].append(test_dict['testing loss'])
+        results['test_loss_loc'].append(test_dict['localization loss'])
+        results['test_loss_conf'].append(test_dict['classification loss'])
+        results['test_loss_GIoU'].append(test_dict['GIoU loss'])
+        results['training timing'].append(train_dict['timing'])
+        results['testing timing'].append(test_dict['timing'])
+        results["epochs"][0] = current_epoch
+        results['mAP train'].append(train_dict['mAP']['map_50'].item() if compute_mAP_train else 0.0)
+        if include_test_step:
+            results['mAP test'].append(test_dict['mAP']['map_50'].item() if compute_mAP_test else 0.0)
+
+
+
+
+        val_metric = mAP_score
+        is_better = (best_metric is None) or (val_metric > best_metric)
+        if is_better:
+                best_metric = val_metric
+
+        # Early stopping rounds
+        if early_stopping_rounds is not None:
+            if is_better:
+                conseq_rounds = 0
+
+            else:
+                conseq_rounds += 1
+                if conseq_rounds >= early_stopping_rounds:
+                    print(f"Early stopping after {early_stopping_rounds} rounds without improvement.")
+                    results["epochs"][0] = current_epoch
+                    if save_model:
+                        loss_dict = (merge_dicts_preserve_order(past_train_dict, results)
+                            if past_train_dict is not None else results)
+                        save_checkpoint(epoch=current_epoch,
+                                        model=model,
+                                        loss_dict=loss_dict,
+                                        optimizer=optimizer,
+                                        scheduler=scheduler,
+                                        scaler=scaler,
+                                        best_metric=best_metric,
+                                        outdir=SAVE_DIR,
+                                        tag="last",)
+                    break
+
+                
+        if save_model:
+            # build loss_dict only if we're going to save something this epoch
+            will_save_last   = (epoch_save_interval is None)
+            will_save_period = (epoch_save_interval is not None
+                                and current_epoch % epoch_save_interval == 0)
+            will_save_best   = (save_best_model and is_better)
+
+            if will_save_last or will_save_period or will_save_best:
+                loss_dict = (merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results)
+
+            # rolling "last" snapshot
+            if will_save_last:
+                save_checkpoint(epoch=current_epoch,  # choose 1-based consistently
+                                model=model,
+                                loss_dict=loss_dict,
+                                optimizer=optimizer,
+                                scheduler=scheduler,
+                                scaler=scaler,
+                                best_metric=val_metric,   # metric at this epoch
+                                outdir=SAVE_DIR,
+                                tag="last",)
+
+            # periodic labeled checkpoints
+            if will_save_period:
+                save_checkpoint(epoch=current_epoch,
+                                model=model,
+                                loss_dict=loss_dict,
+                                optimizer=optimizer,
+                                scheduler=scheduler,
+                                scaler=scaler,
+                                best_metric=val_metric,   # metric at this epoch
+                                outdir=SAVE_DIR,
+                                tag=f"epoch_{current_epoch:03d}",)
+
+            # separate "best" snapshot
+            if will_save_best:
+                save_checkpoint(epoch=current_epoch,
+                                model=model,
+                                loss_dict=loss_dict,
+                                optimizer=optimizer,
+                                scheduler=scheduler,
+                                scaler=scaler,
+                                best_metric=best_metric,  # global best so far
+                                outdir=SAVE_DIR,
+                                tag="best",)
+
+
+
+    # return results
+    return merge_dicts_preserve_order(past_train_dict, results) if past_train_dict is not None else results
