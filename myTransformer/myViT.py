@@ -222,7 +222,8 @@ class VisionTransformer(nn.Module):
     def predict(self,
                 images: torch.Tensor,
                 pre_class_logits: torch.Tensor | None = None,
-                pre_bboxes: torch.Tensor | None = None
+                pre_bboxes: torch.Tensor | None = None,
+                conf_thresh: float | None = None,
                 ) -> List[Dict]:
         """
         Inputs:
@@ -232,6 +233,7 @@ class VisionTransformer(nn.Module):
         - pre_bboxes: Optional tensor of shape [B, Q, 4],
             containing precomputed normalized bounding boxes in
             (cx, cy, w, h) format.
+        - conf_thresh: Optional float to set confidence threshold cutoff.
 
         Returns:
         - predictions: List of length B. Each element is a dictionary:
@@ -319,13 +321,22 @@ class VisionTransformer(nn.Module):
 
         predictions = []
 
+        # Probability of background/no-object
+        if conf_thresh is not None:
+            background_scores = class_probs[..., self.num_classes]
+
         for i in range(B):
+            keep = None
+            # Optionally impose an additional confidence threshold
+            # Query must prefer a foreground class over background
+            if conf_thresh is not None:
+                keep = (scores[i] >= conf_thresh) & (scores[i] > background_scores[i])
 
             predictions.append(
                 {
-                    "labels": labels[i],
-                    "scores": scores[i],
-                    "boxes": boxes_xyxy[i],
+                    "labels": labels[i] if keep is None else labels[i][keep],
+                    "scores": scores[i] if keep is None else scores[i][keep],
+                    "boxes": boxes_xyxy[i] if keep is None else boxes_xyxy[i][keep],
                 }
             )
 

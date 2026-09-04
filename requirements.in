@@ -30,6 +30,8 @@ python-multipart
 # Evaluation / plotting / notebooks / utilities
 matplotlib
 pandas
+pycocotools
 scikit-learn
+torchmetrics
 tqdm
 jupyter

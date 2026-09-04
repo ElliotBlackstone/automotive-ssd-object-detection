@@ -1,17 +1,19 @@
 # Automotive SSD Object Detection
 
-A from-scratch PyTorch implementation of the Single Shot Multibox Detector (SSD) for automotive object detection on dashcam imagery.
+A from-scratch PyTorch automotive object-detection project for dashcam imagery, with Single Shot Multibox Detector (SSD) models and a newer query-based transformer detector.
 
-This repository now contains **two generations of the project**:
+This repository contains **two generations of the SSD project** plus a transformer-based alternative:
 
 - **v1**: the original baseline implementation
 - **v2**: a reorganized and expanded codebase with modular model/training files, model comparisons, benchmarking, ONNX/PTQ experiments, and local real-time video inference
+- **Transformer**: a custom encoder-decoder detector with learned object queries and Hungarian matching
 
 The project also includes:
 
 - dataset exploration and preprocessing notebooks
-- training and evaluation code
+- SSD and transformer training and evaluation code
 - benchmarking and profiling utilities
+- SSD-vs-transformer accuracy and confidence-threshold comparisons
 - ONNX export and post-training quantization (PTQ) workflows
 - local webcam/video inference scripts
 - the earlier FastAPI/Cloud Run web app code used for a hosted demo
@@ -24,14 +26,17 @@ The project also includes:
 ├── v2/                               # Newer codebase
 │   ├── model_files/                  # SSD model, priors, encode/decode, NMS helpers, visualization
 │   └── training_files/               # Training loop, dataloaders, losses, profiling, checkpoints
+├── myTransformer/                    # Custom transformer detector, training, evaluation, and benchmarks
 ├── PTQ_testing/                      # ONNX export, parity tests, PTQ, evaluation, benchmark scripts
-├── benchmarking/                     # DataLoader and training/inference benchmark utilities
+├── benchmarking/                     # Performance benchmarks and confidence-threshold sweeps
 ├── docs/                             # GitHub pages website files
 ├── app_files/                        # Earlier FastAPI + Docker web demo code
 ├── figures/                          # Figures and plots
 ├── papers/                           # Reference material
 ├── EDA_car.ipynb                     # Dataset exploration
 ├── SSD_explained.md                  # High-level SSD explanation
+├── compare_models.py                 # SSD-v2 and transformer test-set evaluation
+├── model_comparison_results.md       # Recorded detector comparison results
 ├── smoke_test_requirements.py        # Checks local environment
 ├── SSDInt8_ONNX_Pred.py              # ONNX int8 predictor
 ├── SSDInt8_ONNX_Pred_v2.py           # ONNX int8 predictor for v2 workflow
@@ -51,7 +56,7 @@ The repository includes exploratory analysis and preprocessing notebooks:
 - [`EDA_car.ipynb`](./EDA_car.ipynb) for exploratory data analysis
 - [`v1/preprocess_car.ipynb`](./v1/preprocess_car.ipynb) for the preprocessing workflow
 
-The preprocessing pipeline collapses traffic-light subclasses into a single class and prepares SSD-ready train/test data.
+The preprocessing pipeline collapses traffic-light subclasses into a single class and prepares detector-ready train/test data.
 
 ## Project Versions
 
@@ -93,6 +98,26 @@ Use v1 if you want to inspect the first complete end-to-end version of the proje
 - profiling notebooks and scripts
 
 Use v2 if you want the current, more modular version of the project.
+
+## Transformer Detector
+
+[`myTransformer/`](./myTransformer) contains a from-scratch, query-based transformer detector for the same five road-scene classes as the SSD models. Images are converted to patch embeddings with 2D positional encodings, passed through a custom encoder-decoder stack, and decoded by learned object queries into class logits and normalized bounding boxes. Training uses one-to-one Hungarian assignment with classification, L1, and generalized-IoU costs; the same loss components are also applied to intermediate decoder outputs as auxiliary losses.
+
+The main entry points are:
+
+- [`myViT.py`](./myTransformer/myViT.py): model assembly and prediction postprocessing
+- [`train_ViT_model.py`](./myTransformer/train_ViT_model.py): training configuration and checkpoint resume logic
+- [`ViTTrainer.py`](./myTransformer/ViTTrainer.py), [`myTrainStep.py`](./myTransformer/myTrainStep.py), and [`myTestStep.py`](./myTransformer/myTestStep.py): training and validation loops with AMP, gradient clipping, checkpointing, and mAP evaluation
+- [`HungarianMatchBatched.py`](./myTransformer/HungarianMatchBatched.py): batched matching-cost construction and per-image assignment
+- [`test_notebook.ipynb`](./myTransformer/test_notebook.ipynb) and [`view_preds.py`](./myTransformer/view_preds.py): test-set evaluation and prediction visualization
+- [`benchmark_vit_training.py`](./myTransformer/benchmark_vit_training.py), [`benchmark_multihead_attention.py`](./myTransformer/benchmark_multihead_attention.py), and [`benchmark_hungarian_match.py`](./myTransformer/benchmark_hungarian_match.py): focused performance benchmarks
+
+Before running the trainer, select the appropriate `machine`/dataset path in [`train_ViT_model.py`](./myTransformer/train_ViT_model.py). Then run it from the transformer directory so its local module imports resolve:
+
+```powershell
+cd myTransformer
+python train_ViT_model.py --epochs 5
+```
 
 ## Training and Evaluation
 
@@ -160,9 +185,9 @@ The repository still contains the earlier FastAPI + Docker web app in [`app_file
 
 The repository now also emphasizes **local inference**, **ONNX/PTQ**, and **real-time video detection**. A similar demo is also available as a static GitHub Pages site [here](https://elliotblackstone.github.io/automotive-ssd-object-detection/). Unlike the earlier Cloud Run deployment, the GitHub Pages version performs inference directly in the browser using ONNX Runtime Web, so no backend model server is required.  This means uploaded images are processed client-side, and performance may vary depending on the user’s browser and hardware.
 
-## Comparison Notebooks
+## Model Comparison and Analysis
 
-The repository contains several notebooks that are useful for understanding how the project evolved:
+The repository contains several notebooks and scripts that are useful for understanding how the project evolved:
 
 - [`SSD_model_compare.ipynb`](./benchmarking/SSD_model_compare.ipynb)
 - [`v1_vs_v2.ipynb`](./benchmarking/v1_vs_v2.ipynb)
@@ -170,12 +195,27 @@ The repository contains several notebooks that are useful for understanding how 
 
 These are the best places to document detailed experiment results, plots, and version-to-version comparisons without overloading the top-level README.
 
+### SSD v2 vs Transformer
+
+[`compare_models.py`](./compare_models.py) evaluates both detectors on the same labeled test set using COCO-style AP and threshold-specific precision, recall, F1, false positives per image, and matched-box IoU. The recorded 9,937-image run in [`model_comparison_results.md`](./model_comparison_results.md) reports:
+
+| Metric | SSD v2 | Transformer |
+|---|---:|---:|
+| mAP@0.50 | 0.5697 | 0.7310 |
+| mAP@0.75 | 0.2778 | 0.3789 |
+| mAP@[0.50:0.95] | 0.3042 | 0.3934 |
+| F1 at the selected threshold (0.30 / 0.95) | 0.7438 | 0.7896 |
+
+Validation confidence-threshold sweeps are available in [`benchmarking/validation_threshold_sweep.py`](./benchmarking/validation_threshold_sweep.py) and [`benchmarking/transformer_validation_fine_sweep.py`](./benchmarking/transformer_validation_fine_sweep.py), with their generated Markdown reports stored alongside the scripts.
+
 ## What Changed in This Repository
 
 Compared with the earlier form of the project, the repository now clearly includes:
 
 - a legacy **v1** implementation and a newer **v2** implementation
+- a custom transformer detector with its own training, evaluation, and profiling workflow
 - a more modular training and model structure in v2
+- SSD-vs-transformer comparison and confidence-threshold sweep utilities
 - ONNX and PTQ tooling
 - benchmarking/profiling utilities
 - local real-time video detection scripts
@@ -189,5 +229,6 @@ Then choose the workflow that matches what you want to do:
 
 - inspect the original baseline in [`v1/`](./v1)
 - work with the newer modular code in [`v2/`](./v2)
+- train or evaluate the query-based detector in [`myTransformer/`](./myTransformer)
 - explore ONNX/PTQ in [`PTQ_testing/`](./PTQ_testing)
 - test local inference with the real-time/video scripts in the repository root

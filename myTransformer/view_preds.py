@@ -83,18 +83,12 @@ def show_prediction_side_by_side(model: VisionTransformer,
         # -------------------------------------------------------------------------
         # 3. Run prediction
         # -------------------------------------------------------------------------
-        preds = model.predict(images=img_tensor)
+        preds = model.predict(images=img_tensor, conf_thresh=conf_thresh)
 
         pred = preds[0]
         boxes = pred["boxes"].to("cpu")    # [K,4], xyxy in 300x300 coords
         labels = pred["labels"].to("cpu")  # [K]
         scores = pred["scores"].to("cpu")  # [K]
-
-        keep = scores > conf_thresh
-
-        boxes = boxes[keep]
-        labels = labels[keep]
-        scores = scores[keep]
 
         # -------------------------------------------------------------------------
         # 4. Choose display size with fixed height and aspect-preserving width
